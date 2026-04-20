@@ -55,13 +55,12 @@ jobs:
 
       - name: Library — lint
         run: ./gradlew :library:lintRelease --no-daemon --stacktrace
-        continue-on-error: false
 
       - name: Library — assemble release AAR
         run: ./gradlew :library:assembleRelease --no-daemon --stacktrace
 
-      - name: Sample app — assemble debug APK
-        run: ./gradlew :sample:assembleDebug --no-daemon --stacktrace
+      - name: Library — publishToMavenLocal (smoke-test the POM + AAR JitPack will see)
+        run: ./gradlew :library:publishToMavenLocal --no-daemon --stacktrace
 
       - name: Upload library AAR
         uses: actions/upload-artifact@v4
@@ -70,12 +69,13 @@ jobs:
           path: library/build/outputs/aar/*.aar
           if-no-files-found: error
 
-      - name: Upload sample APK
+      - name: Upload unit-test report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sample-debug-apk
-          path: sample/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+          name: test-report
+          path: library/build/reports/tests/testReleaseUnitTest
+          if-no-files-found: ignore
 
       - name: Upload lint report
         if: always()

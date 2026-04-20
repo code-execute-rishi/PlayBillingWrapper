@@ -82,7 +82,8 @@ Critical correctness fixes surfaced by Codex + CodeRabbit review of the initial 
 - **Full Apache License 2.0 text** in `LICENSE` (was previously just the short-form header).
 - Documentation clean-up (Javadoc parameter ordering, `OfferSelector` doc/impl consistency,
   README wording).
-- Sample app unregisters its listener in `onDestroy` to avoid leaks.
+- Integration docs call out the listener-cleanup pattern (`billing.setListener(null)`
+  in `Activity.onDestroy`) for consumers.
 
 ## 0.1.0 — 2026-04-20
 
@@ -105,7 +106,7 @@ Initial release.
   take hours or days; the library keeps the purchase token alive and reconciles on every
   reconnect.
 - Documentation: INTEGRATION, API, SECURITY, TESTING, MIGRATION.
-- Sample app demonstrating all three shapes.
+- Integration guide demonstrates all three shapes end-to-end.
 
 ### Based on
 

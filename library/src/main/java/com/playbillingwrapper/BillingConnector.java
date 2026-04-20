@@ -79,13 +79,13 @@ public class BillingConnector implements DefaultLifecycleObserver {
     private static final long RECONNECT_TIMER_MAX_TIME_MILLISECONDS = 1000L * 60L * 15L;
     private final AtomicLong reconnectMilliseconds = new AtomicLong(RECONNECT_TIMER_START_MILLISECONDS);
 
-    private static final int DEFAULT_maxPendingRetries = 60;
+    private static final int DEFAULT_MAX_PENDING_RETRIES = 60;
     private static final long INITIAL_RETRY_DELAY_MS = 1000L;
     private static final long MAX_RETRY_DELAY_MS = 60_000L;
     // Real PENDING (cash, bank transfer) may take hours/days. Default is effectively unbounded.
     private static final long DEFAULT_MAX_PENDING_DURATION_MS = Long.MAX_VALUE;
 
-    private int maxPendingRetries = DEFAULT_maxPendingRetries;
+    private int maxPendingRetries = DEFAULT_MAX_PENDING_RETRIES;
     private long maxPendingDurationMs = DEFAULT_MAX_PENDING_DURATION_MS;
 
     private String obfuscatedAccountId;

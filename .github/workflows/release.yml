@@ -8,7 +8,6 @@ name: Auto Release
 #   - Any "BREAKING CHANGE" in body  OR  "!:" in subject  →  major
 #   - Any "feat:" / "feature:"                            →  minor
 #   - Otherwise (fix:, perf:, refactor:, chore:, docs:)    →  patch
-#   - If ONLY "[skip release]" / "release v" subjects      →  no release
 #
 # The release commit is itself tagged "chore(release): vX.Y.Z [skip ci]" so this
 # workflow does not re-trigger on its own push.
@@ -61,7 +60,6 @@ jobs:
           echo "current=$CURRENT" | tee -a "$GITHUB_OUTPUT"
           IFS='.' read -r MAJ MIN PAT <<< "$CURRENT"
 
-          # Did the HEAD commit itself already create a release? Skip.
           HEAD_SUBJECT=$(git log -1 --pretty=%s)
           if [[ "$HEAD_SUBJECT" == chore\(release\):* ]]; then
             echo "HEAD is a release commit — nothing to do."
@@ -115,7 +113,6 @@ jobs:
 
           sed -i "s/version = '${CURRENT}'/version = '${NEXT}'/g" library/build.gradle
 
-          # Update install snippets in user-facing docs.
           sed -i "s|com.github.code-execute-rishi:PlayBillingWrapper:${CURRENT}|com.github.code-execute-rishi:PlayBillingWrapper:${NEXT}|g" \
             README.md docs/INTEGRATION.md docs/MIGRATION.md || true
 
@@ -145,8 +142,6 @@ jobs:
           git push origin HEAD:main
           git push origin "v${NEXT}"
 
-          echo "tag=v${NEXT}" >> "$GITHUB_OUTPUT"
-
       - name: Create GitHub Release
         if: steps.version.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
@@ -169,7 +164,6 @@ jobs:
         run: |
           set -euo pipefail
           NEXT="${{ steps.version.outputs.next }}"
-          # Hitting the URL queues the build. Poll for up to 3 minutes.
           echo "Priming JitPack for v${NEXT}..."
           for i in 1 2 3 4 5 6 7 8 9 10; do
             STATUS=$(curl -sS "https://jitpack.io/api/builds/com.github.code-execute-rishi/PlayBillingWrapper/${NEXT}" | grep -oE '"status"\s*:\s*"[^"]+"' | head -1 || echo "")

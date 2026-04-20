@@ -7,7 +7,6 @@ pluginManagement {
 }
 
 plugins {
-    id 'com.android.application' version '8.7.3' apply false
     id 'com.android.library' version '8.7.3' apply false
 }
 
@@ -22,4 +21,3 @@ dependencyResolutionManagement {
 rootProject.name = "PlayBillingWrapper"
 
 include ':library'
-include ':sample'
