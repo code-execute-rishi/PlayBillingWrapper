@@ -31,3 +31,4 @@ google-services.json
 .DS_Store
 .AppleDouble
 .LSOverride
+.claude/
