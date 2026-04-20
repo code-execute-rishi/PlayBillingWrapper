@@ -47,9 +47,10 @@ opinionated for the three shapes above, and safe by default.
   trial-per-account enforcement, and server-side token ↔ user mapping.
 - **`OfferSelector`** picks the right subscription offer token by base plan id + optional offer id,
   auto-preferring a free-trial offer when the user is still eligible.
-- **`SubscriptionState` enum** — `ACTIVE`, `IN_TRIAL`, `CANCELED_ACTIVE`, `PENDING`,
-  `EXPIRED`. Purely client-side, computed from the `Purchase` Play returns. No backend
-  required.
+- **`SubscriptionState` enum** — `ACTIVE`, `CANCELED_ACTIVE`, `PENDING`, `EXPIRED`.
+  Purely client-side, computed from the `Purchase` Play returns. No backend required.
+  (`IN_TRIAL` / `GRACE_PERIOD` / `ON_HOLD` / `PAUSED` are server-side; this library is
+  intentionally local-only.)
 - **On-device signature verification** via Play's public key (optional). Disabled by default —
   the README explains how to move verification to your server.
 - **Deep-link to Play's manage-subscription page** in one call.
@@ -161,7 +162,6 @@ public class PaywallActivity extends AppCompatActivity implements WrapperListene
     @Override public void onSubscriptionActivated(@NonNull String productId,
                                                   @NonNull SubscriptionState state,
                                                   @NonNull PurchaseInfo purchase) {
-        if (state == SubscriptionState.IN_TRIAL) showTrialBanner();
         unlockFeatures();
     }
 

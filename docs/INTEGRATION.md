@@ -141,15 +141,14 @@ if (billing.isPremium()) {
 
 - `hasLifetime()` — true if the lifetime product is owned.
 - `monthlyState()` / `yearlyState()` — returns a `SubscriptionState`:
-  - `ACTIVE` — auto-renewing, not in trial
-  - `IN_TRIAL` — auto-renewing, currently in a free-trial pricing phase
+  - `ACTIVE` — purchased + auto-renewing
   - `CANCELED_ACTIVE` — cancelled but still entitled until period end
   - `PENDING` — slow payment method, not yet cleared
   - `EXPIRED` — not owned
 
-  The wrapper is local-only. Play's server-side states (`GRACE_PERIOD`, `ON_HOLD`,
-  `PAUSED`) are not observable reliably without a backend — if you need them, stand up
-  your own server and query the Google Play Developer API directly.
+  The wrapper is local-only. Play's richer states (`IN_TRIAL`, `GRACE_PERIOD`, `ON_HOLD`,
+  `PAUSED`) are not observable reliably from a client `Purchase` alone — if you need them,
+  stand up a backend and call the Google Play Developer API's `subscriptionsv2.get`.
 - `isTrialEligibleForYearly()` — Play determines this; ineligible offers are silently omitted
   from `ProductDetails`, so the lib checks whether any offer on the base plan still has a free
   pricing phase.
