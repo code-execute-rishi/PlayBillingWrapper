@@ -36,7 +36,7 @@ public final class IdempotencyStore {
     public synchronized void markHandled(@NonNull String purchaseToken) {
         Set<String> handled = new HashSet<>(prefs.getStringSet(KEY_HANDLED_TOKENS, new HashSet<>()));
         handled.add(purchaseToken);
-        prefs.edit().putStringSet(KEY_HANDLED_TOKENS, handled).apply();
+        prefs.edit().putStringSet(KEY_HANDLED_TOKENS, handled).commit();
     }
 
     /** True if the token has been marked handled before. */
@@ -54,11 +54,11 @@ public final class IdempotencyStore {
         if (handled == null || !handled.contains(purchaseToken)) return;
         Set<String> copy = new HashSet<>(handled);
         copy.remove(purchaseToken);
-        prefs.edit().putStringSet(KEY_HANDLED_TOKENS, copy).apply();
+        prefs.edit().putStringSet(KEY_HANDLED_TOKENS, copy).commit();
     }
 
     /** Clear every recorded token. Useful for tests; do not call in production. */
     public synchronized void clearAll() {
-        prefs.edit().remove(KEY_HANDLED_TOKENS).apply();
+        prefs.edit().remove(KEY_HANDLED_TOKENS).commit();
     }
 }

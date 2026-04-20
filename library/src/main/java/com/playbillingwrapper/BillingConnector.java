@@ -130,7 +130,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
      *                  cleanup when the lifecycle owner is destroyed. Can be null if manual lifecycle
      *                  management is preferred.
      */
-    public BillingConnector(@NonNull Context context, String base64Key, @Nullable Lifecycle lifecycle) {
+    public BillingConnector(@NonNull Context context, @Nullable String base64Key, @Nullable Lifecycle lifecycle) {
         this.context = context.getApplicationContext();
         this.base64Key = base64Key;
         if (lifecycle != null) {
@@ -399,11 +399,6 @@ public class BillingConnector implements DefaultLifecycleObserver {
         allProductList.addAll(productInAppList);
         allProductList.addAll(productSubsList);
 
-        int queryCount = 0;
-        if (!productInAppList.isEmpty()) queryCount++;
-        if (!productSubsList.isEmpty()) queryCount++;
-        productDetailsQueriesPending.set(queryCount);
-
         // Check if any list is provided
         if (allProductList.isEmpty()) {
             throw new IllegalArgumentException("At least one list of consumables, non-consumables or subscriptions is needed");
@@ -440,15 +435,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
                             // Reset the reconnect timer on successful connection
                             reconnectMilliseconds.set(RECONNECT_TIMER_START_MILLISECONDS);
 
-                            // Query consumable and non-consumable product details
-                            if (!productInAppList.isEmpty()) {
-                                queryProductDetails(INAPP, productInAppList);
-                            }
-
-                            // Query subscription product details
-                            if (subscriptionIds != null) {
-                                queryProductDetails(SUBS, productSubsList);
-                            }
+                            runProductAndPurchaseQueries(productInAppList, productSubsList);
                             break;
                         case BILLING_UNAVAILABLE:
                             Log("Billing service: unavailable");
@@ -461,9 +448,36 @@ public class BillingConnector implements DefaultLifecycleObserver {
                     }
                 }
             });
+        } else {
+            // Already connected -- re-run queries so that restorePurchases() / onResume refresh actually works.
+            runProductAndPurchaseQueries(productInAppList, productSubsList);
         }
 
         return this;
+    }
+
+    /**
+     * Kicks off product-detail and purchase queries. Safe to call multiple times -- the
+     * fetched product cache is reset at the start so sibling results don't stale-clobber.
+     */
+    private void runProductAndPurchaseQueries(
+            @NonNull List<QueryProductDetailsParams.Product> productInAppList,
+            @NonNull List<QueryProductDetailsParams.Product> productSubsList) {
+        // Reset the fetched cache so concurrent INAPP/SUBS callbacks both have a clean slate
+        // to append into -- never wipe the sibling's results.
+        fetchedProductInfoList.clear();
+
+        int queryCount = 0;
+        if (!productInAppList.isEmpty()) queryCount++;
+        if (!productSubsList.isEmpty()) queryCount++;
+        productDetailsQueriesPending.set(queryCount);
+
+        if (!productInAppList.isEmpty()) {
+            queryProductDetails(INAPP, productInAppList);
+        }
+        if (!productSubsList.isEmpty()) {
+            queryProductDetails(SUBS, productSubsList);
+        }
     }
 
     /**
@@ -511,6 +525,10 @@ public class BillingConnector implements DefaultLifecycleObserver {
                     Log("Query Product Details: No valid products found. Make sure product IDs are configured on Play Console");
                     findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this, new BillingResponse(ErrorType.BILLING_ERROR,
                             "No products found", defaultResponseCode)));
+                    // Still decrement so the sibling INAPP/SUBS query can drive purchase reconciliation.
+                    if (productDetailsQueriesPending.decrementAndGet() == 0) {
+                        fetchPurchasedProducts();
+                    }
                 } else {
                     Log("Query Product Details: data found for " + productDetailsList.size() + " products");
 
@@ -519,8 +537,8 @@ public class BillingConnector implements DefaultLifecycleObserver {
                         fetchedProductInfo.add(generateProductInfo(productDetails));
                     }
 
-                    // Clear the list to prevent UI duplicates on reconnect
-                    fetchedProductInfoList.clear();
+                    // Append this query group's results; do NOT clear, or the sibling
+                    // (INAPP vs SUBS) query's results would be wiped.
                     fetchedProductInfoList.addAll(fetchedProductInfo);
 
                     switch (productType) {
@@ -870,14 +888,14 @@ public class BillingConnector implements DefaultLifecycleObserver {
                         return;
                     }
 
-                    productDetailsParamsList = List.of(
+                    productDetailsParamsList = Collections.singletonList(
                             BillingFlowParams.ProductDetailsParams.newBuilder()
                                     .setProductDetails(productDetails)
                                     .setOfferToken(resolvedToken)
                                     .build()
                     );
                 } else {
-                    productDetailsParamsList = List.of(
+                    productDetailsParamsList = Collections.singletonList(
                             BillingFlowParams.ProductDetailsParams.newBuilder()
                                     .setProductDetails(productDetails)
                                     .build()
@@ -890,7 +908,16 @@ public class BillingConnector implements DefaultLifecycleObserver {
                 if (obfuscatedAccountId != null) flowBuilder.setObfuscatedAccountId(obfuscatedAccountId);
                 if (obfuscatedProfileId != null) flowBuilder.setObfuscatedProfileId(obfuscatedProfileId);
 
-                billingClient.launchBillingFlow(activity, flowBuilder.build());
+                BillingResult launchResult = billingClient.launchBillingFlow(activity, flowBuilder.build());
+                if (launchResult.getResponseCode() != OK) {
+                    // Play can refuse the launch synchronously (e.g. stale offer token, bad
+                    // Activity state). In that case onPurchasesUpdated will not fire, so we
+                    // must surface the error ourselves.
+                    Log("launchBillingFlow returned non-OK: " + launchResult.getResponseCode()
+                            + " — " + launchResult.getDebugMessage());
+                    findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                            new BillingResponse(ErrorType.BILLING_ERROR, launchResult)));
+                }
             } else {
                 Log("Billing client can not launch billing flow because product details are missing for product: " + productId);
                 findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this, new BillingResponse(ErrorType.PRODUCT_NOT_EXIST,
@@ -1406,7 +1433,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
      */
     public List<PurchaseInfo> getPurchasedProductsList() {
         synchronized (purchasedProductsSync) {
-            return List.copyOf(purchasedProductsList);
+            return Collections.unmodifiableList(new ArrayList<>(purchasedProductsList));
         }
     }
 
@@ -1415,7 +1442,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
      */
     @NonNull
     public List<ProductInfo> getFetchedProductInfoList() {
-        return List.copyOf(fetchedProductInfoList);
+        return Collections.unmodifiableList(new ArrayList<>(fetchedProductInfoList));
     }
 
     /**
@@ -1455,9 +1482,13 @@ public class BillingConnector implements DefaultLifecycleObserver {
     }
 
     /**
-     * Checks purchase signature validity
+     * Checks purchase signature validity. When no license key is configured the check is
+     * skipped (and the purchase is treated as valid). Google recommends moving signature
+     * verification to your server anyway -- the client-side key is trivial to extract from
+     * an APK and offers only weak protection.
      */
     private boolean isPurchaseSignatureValid(@NonNull Purchase purchase) {
+        if (base64Key == null || base64Key.isEmpty()) return true;
         return Security.verifyPurchase(base64Key, purchase.getOriginalJson(), purchase.getSignature());
     }
 

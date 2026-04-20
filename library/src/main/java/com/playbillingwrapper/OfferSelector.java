@@ -67,7 +67,10 @@ public final class OfferSelector {
 
     /**
      * True if the given product has at least one eligible offer on {@code basePlanId}
-     * that starts with a free-trial pricing phase.
+     * that contains a free-trial pricing phase (any phase with {@code priceAmountMicros == 0}).
+     * <p>
+     * Note: Google Play silently omits ineligible offers from {@code getSubscriptionOfferDetails()},
+     * so this is also a reliable proxy for "is the current Play account still trial-eligible".
      */
     public static boolean isTrialEligible(@NonNull ProductDetails details, @NonNull String basePlanId) {
         List<ProductDetails.SubscriptionOfferDetails> all = details.getSubscriptionOfferDetails();

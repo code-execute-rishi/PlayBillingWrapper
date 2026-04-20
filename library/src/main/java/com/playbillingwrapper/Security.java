@@ -7,6 +7,7 @@ import android.util.Log;
 import androidx.annotation.NonNull;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.KeyFactory;
 import java.security.NoSuchAlgorithmException;
@@ -91,7 +92,7 @@ class Security {
         try {
             Signature signatureAlgorithm = Signature.getInstance(SIGNATURE_ALGORITHM);
             signatureAlgorithm.initVerify(publicKey);
-            signatureAlgorithm.update(signedData.getBytes());
+            signatureAlgorithm.update(signedData.getBytes(StandardCharsets.UTF_8));
             if (!signatureAlgorithm.verify(signatureBytes)) {
                 Log.w(TAG, "Signature verification failed...");
                 return false;

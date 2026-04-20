@@ -63,6 +63,12 @@ public class MainActivity extends AppCompatActivity implements WrapperListener {
         status.setText(sb.toString());
     }
 
+    @Override
+    protected void onDestroy() {
+        if (billing != null) billing.setListener(null);
+        super.onDestroy();
+    }
+
     @Override public void onReady() { runOnUiThread(this::refresh); }
     @Override public void onLifetimePurchased(@NonNull PurchaseInfo purchase) { runOnUiThread(this::refresh); }
     @Override public void onSubscriptionActivated(@NonNull String productId, @NonNull SubscriptionState state, @NonNull PurchaseInfo purchase) { runOnUiThread(this::refresh); }

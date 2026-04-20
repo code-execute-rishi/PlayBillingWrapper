@@ -24,7 +24,7 @@ public class ProductInfo {
     private final String oneTimePurchaseOfferPriceCurrencyCode;
     private final List<SubscriptionOfferDetails> subscriptionOfferDetails;
 
-    public ProductInfo(SkuProductType skuProductType, @NonNull ProductDetails productDetails) {
+    public ProductInfo(@NonNull SkuProductType skuProductType, @NonNull ProductDetails productDetails) {
         this.skuProductType = skuProductType;
         this.productDetails = productDetails;
         this.product = productDetails.getProductId();

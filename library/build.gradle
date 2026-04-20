@@ -43,16 +43,19 @@ afterEvaluate {
                 from components.release
                 groupId = 'com.github.code-execute-rishi'
                 artifactId = 'PlayBillingWrapper'
-                version = '0.1.0'
+                version = '0.1.1'
             }
         }
     }
 }
 
 dependencies {
-    implementation 'androidx.annotation:annotation:1.9.1'
-    implementation 'androidx.lifecycle:lifecycle-common:2.8.7'
-    implementation 'com.android.billingclient:billing:8.3.0'
+    // Types from these libs are exposed on the public surface (BillingResult, ProductDetails,
+    // Purchase, Lifecycle, @NonNull / @Nullable), so they must be `api` to stay on the
+    // consumer's compile classpath.
+    api 'androidx.annotation:annotation:1.9.1'
+    api 'androidx.lifecycle:lifecycle-common:2.8.7'
+    api 'com.android.billingclient:billing:8.3.0'
 
     testImplementation 'junit:junit:4.13.2'
 }

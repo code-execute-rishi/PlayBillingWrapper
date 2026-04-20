@@ -87,8 +87,9 @@ public final class PlayBillingWrapper implements BillingEventListener {
         this.listener = listener;
         this.idemStore = new IdempotencyStore(app);
 
-        String key = config.base64LicenseKey == null ? "" : config.base64LicenseKey;
-        this.connector = new BillingConnector(app, key, lifecycle);
+        // Pass the key through as-is; BillingConnector skips signature verification when it is
+        // null or empty (the Play-recommended posture is to verify on your server anyway).
+        this.connector = new BillingConnector(app, config.base64LicenseKey, lifecycle);
 
         List<String> nonConsumables = new ArrayList<>();
         if (config.lifetimeProductId != null) nonConsumables.add(config.lifetimeProductId);

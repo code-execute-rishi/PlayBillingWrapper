@@ -29,8 +29,8 @@ lock you to a SaaS backend and cut ~1% of every dollar. Existing community wrapp
 leak revenue — the three-day acknowledgment rule, offer-token selection for subscription trials,
 `obfuscatedAccountId` for fraud binding, idempotent purchase delivery across app restarts.
 
-PlayBillingWrapper picks the middle path: thin, MIT-free-ish, opinionated for the three shapes
-above, and safe by default.
+PlayBillingWrapper picks the middle path: thin, permissively licensed (Apache-2.0),
+opinionated for the three shapes above, and safe by default.
 
 ## What's included
 
@@ -85,7 +85,7 @@ dependencyResolutionManagement {
 
 ```gradle
 dependencies {
-    implementation 'com.github.code-execute-rishi:PlayBillingWrapper:0.1.0'
+    implementation 'com.github.code-execute-rishi:PlayBillingWrapper:0.1.1'
 }
 ```
 
