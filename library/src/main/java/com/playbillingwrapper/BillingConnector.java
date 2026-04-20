@@ -1023,8 +1023,8 @@ public class BillingConnector implements DefaultLifecycleObserver {
         }
 
         long delayMs = calculateRetryDelay(retryCount);
-        Log("Retrying pending purchase (" + (retryCount + 1) +
-                "/" + maxPendingRetries + ") for: " + purchaseInfo.getProduct());
+        Log("Retrying pending purchase (attempt " + (retryCount + 1) +
+                " of " + maxPendingRetries + ") for: " + purchaseInfo.getProduct());
 
         findUiHandler().postDelayed(() -> {
             boolean shouldContinue = verifyPurchaseState(purchaseInfo);
@@ -1293,7 +1293,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
     private void handleConsumeFailure(@NonNull PurchaseInfo purchaseInfo) {
         Log("Consume failed for: " + purchaseInfo.getProduct());
         findUiHandler().post(() -> safe().onBillingError(BillingConnector.this, new BillingResponse(ErrorType.CONSUME_ERROR,
-                "Failed to consume  purchase", defaultResponseCode)));
+                "Failed to consume purchase", defaultResponseCode)));
     }
 
     /**
@@ -1388,6 +1388,8 @@ public class BillingConnector implements DefaultLifecycleObserver {
             activity.startActivity(intent);
         } catch (Exception e) {
             Log("Failed to open manage-subscription page: " + e.getMessage());
+            notifyBillingError(ErrorType.BILLING_ERROR,
+                    "Could not open Play manage-subscription page: " + e.getMessage());
         }
     }
 
