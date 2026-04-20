@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="24dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="PlayBillingWrapper — Demo"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:paddingBottom="16dp" />
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:textSize="14sp"
+            android:padding="12dp"
+            android:background="#22000000" />
+
+        <Button
+            android:id="@+id/btn_lifetime"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Buy Lifetime"
+            android:layout_marginTop="16dp" />
+
+        <Button
+            android:id="@+id/btn_monthly"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Subscribe Monthly"
+            android:layout_marginTop="8dp" />
+
+        <Button
+            android:id="@+id/btn_yearly"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Subscribe Yearly (with trial)"
+            android:layout_marginTop="8dp" />
+
+        <Button
+            android:id="@+id/btn_restore"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Restore Purchases"
+            android:layout_marginTop="16dp" />
+
+        <Button
+            android:id="@+id/btn_manage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Manage Subscription (Play)"
+            android:layout_marginTop="8dp" />
+    </LinearLayout>
+</ScrollView>

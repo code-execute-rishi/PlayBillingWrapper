@@ -1,0 +1,17 @@
+PlayBillingWrapper
+Copyright (C) 2026 PlayBillingWrapper contributors
+
+This product includes software derived from google-inapp-billing
+(https://github.com/moisoni97/google-inapp-billing)
+Copyright (C) 2021 moisoni97
+Licensed under the Apache License, Version 2.0.
+
+Modifications include but are not limited to:
+  - Package rename to com.playbillingwrapper
+  - New facade (PlayBillingWrapper) with three-method API
+  - New OfferSelector for offer-token picking by base plan + offer id
+  - New SubscriptionState enum
+  - New IdempotencyStore persistent dedupe ledger
+  - obfuscatedAccountId / obfuscatedProfileId wiring in BillingFlowParams
+  - Removal of bounded pending-purchase timeout
+  - New WrapperListener and BillingConfig builder
