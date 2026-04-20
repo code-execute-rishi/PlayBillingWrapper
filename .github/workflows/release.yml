@@ -113,7 +113,10 @@ jobs:
 
           sed -i "s/version = '${CURRENT}'/version = '${NEXT}'/g" library/build.gradle
 
-          sed -i "s|com.github.code-execute-rishi:PlayBillingWrapper:${CURRENT}|com.github.code-execute-rishi:PlayBillingWrapper:${NEXT}|g" \
+          # JitPack resolves the v-prefixed tag but doesn't normalize the non-v coordinate
+          # reliably for this repo, so publish the install snippet with the exact tag name
+          # (v-prefixed). The AAR is fetched by Gradle verbatim via the coordinate.
+          sed -i "s|com.github.code-execute-rishi:PlayBillingWrapper:v\{0,1\}${CURRENT}|com.github.code-execute-rishi:PlayBillingWrapper:v${NEXT}|g" \
             README.md docs/INTEGRATION.md docs/MIGRATION.md || true
 
       - name: Build + test one more time on the bumped version
@@ -154,7 +157,7 @@ jobs:
 
             **Install:**
             ```gradle
-            implementation 'com.github.code-execute-rishi:PlayBillingWrapper:${{ steps.version.outputs.next }}'
+            implementation 'com.github.code-execute-rishi:PlayBillingWrapper:v${{ steps.version.outputs.next }}'
             ```
 
             JitPack build: https://jitpack.io/com/github/code-execute-rishi/PlayBillingWrapper/${{ steps.version.outputs.next }}/build.log
