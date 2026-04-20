@@ -1,0 +1,183 @@
+name: Auto Release
+
+# Runs after CI finishes on main. Determines the next semantic version from commit
+# messages since the last tag, bumps library/build.gradle, tags, pushes, creates a
+# GitHub release, and pings JitPack to kick off the artifact build.
+#
+# Commit-message → bump rules (conventional commits, inspected since the last tag):
+#   - Any "BREAKING CHANGE" in body  OR  "!:" in subject  →  major
+#   - Any "feat:" / "feature:"                            →  minor
+#   - Otherwise (fix:, perf:, refactor:, chore:, docs:)    →  patch
+#   - If ONLY "[skip release]" / "release v" subjects      →  no release
+#
+# The release commit is itself tagged "chore(release): vX.Y.Z [skip ci]" so this
+# workflow does not re-trigger on its own push.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Manual bump type (patch, minor, major). Leave blank to auto-detect.'
+        required: false
+        default: ''
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Tag + Release + JitPack
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push')
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout main @ latest
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine current and next version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CURRENT=$(grep -oE "version = '[^']+'" library/build.gradle | head -1 | sed -E "s/version = '([^']+)'/\1/")
+          echo "current=$CURRENT" | tee -a "$GITHUB_OUTPUT"
+          IFS='.' read -r MAJ MIN PAT <<< "$CURRENT"
+
+          # Did the HEAD commit itself already create a release? Skip.
+          HEAD_SUBJECT=$(git log -1 --pretty=%s)
+          if [[ "$HEAD_SUBJECT" == chore\(release\):* ]]; then
+            echo "HEAD is a release commit — nothing to do."
+            echo "skip=true" | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [[ -z "$LAST_TAG" ]]; then
+            RANGE="HEAD"
+          else
+            RANGE="${LAST_TAG}..HEAD"
+          fi
+
+          COMMITS=$(git log "$RANGE" --pretty=format:'%s%n%b%n---')
+          if [[ -z "$(echo "$COMMITS" | tr -d '[:space:]-')" ]]; then
+            echo "No commits since $LAST_TAG — nothing to release."
+            echo "skip=true" | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          MANUAL="${{ github.event.inputs.bump }}"
+          if [[ -n "$MANUAL" ]]; then
+            BUMP="$MANUAL"
+          elif echo "$COMMITS" | grep -qE '^[A-Za-z]+!:|BREAKING CHANGE'; then
+            BUMP=major
+          elif echo "$COMMITS" | grep -qE '^(feat|feature)(\([^)]+\))?:'; then
+            BUMP=minor
+          else
+            BUMP=patch
+          fi
+          echo "bump=$BUMP" | tee -a "$GITHUB_OUTPUT"
+
+          case "$BUMP" in
+            major) MAJ=$((MAJ+1)); MIN=0; PAT=0 ;;
+            minor) MIN=$((MIN+1)); PAT=0 ;;
+            patch) PAT=$((PAT+1)) ;;
+            *) echo "Unknown bump $BUMP"; exit 1 ;;
+          esac
+          NEXT="$MAJ.$MIN.$PAT"
+          echo "next=$NEXT" | tee -a "$GITHUB_OUTPUT"
+          echo "skip=false" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Update version in sources
+        if: steps.version.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT="${{ steps.version.outputs.current }}"
+          NEXT="${{ steps.version.outputs.next }}"
+
+          sed -i "s/version = '${CURRENT}'/version = '${NEXT}'/g" library/build.gradle
+
+          # Update install snippets in user-facing docs.
+          sed -i "s|com.github.code-execute-rishi:PlayBillingWrapper:${CURRENT}|com.github.code-execute-rishi:PlayBillingWrapper:${NEXT}|g" \
+            README.md docs/INTEGRATION.md docs/MIGRATION.md || true
+
+      - name: Build + test one more time on the bumped version
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew :library:testReleaseUnitTest :library:assembleRelease --no-daemon --stacktrace
+
+      - name: Commit + tag release
+        if: steps.version.outputs.skip != 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          NEXT="${{ steps.version.outputs.next }}"
+          BUMP="${{ steps.version.outputs.bump }}"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add library/build.gradle README.md docs/INTEGRATION.md docs/MIGRATION.md
+          git commit -m "chore(release): v${NEXT} [skip ci]" -m "Automated ${BUMP} bump from CI."
+          git tag -a "v${NEXT}" -m "v${NEXT}"
+          git push origin HEAD:main
+          git push origin "v${NEXT}"
+
+          echo "tag=v${NEXT}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.next }}
+          name: v${{ steps.version.outputs.next }}
+          generate_release_notes: true
+          body: |
+            Automated ${{ steps.version.outputs.bump }} release.
+
+            **Install:**
+            ```gradle
+            implementation 'com.github.code-execute-rishi:PlayBillingWrapper:${{ steps.version.outputs.next }}'
+            ```
+
+            JitPack build: https://jitpack.io/com/github/code-execute-rishi/PlayBillingWrapper/${{ steps.version.outputs.next }}/build.log
+
+      - name: Prime JitPack build
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          NEXT="${{ steps.version.outputs.next }}"
+          # Hitting the URL queues the build. Poll for up to 3 minutes.
+          echo "Priming JitPack for v${NEXT}..."
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            STATUS=$(curl -sS "https://jitpack.io/api/builds/com.github.code-execute-rishi/PlayBillingWrapper/${NEXT}" | grep -oE '"status"\s*:\s*"[^"]+"' | head -1 || echo "")
+            echo "Attempt $i: $STATUS"
+            if echo "$STATUS" | grep -q '"ok"'; then
+              echo "JitPack reports ok."
+              exit 0
+            fi
+            sleep 18
+          done
+          echo "JitPack did not report ok within budget; artifact may still be building."

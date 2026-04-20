@@ -1,5 +1,7 @@
 # PlayBillingWrapper
 
+[![CI](https://github.com/code-execute-rishi/PlayBillingWrapper/actions/workflows/ci.yml/badge.svg)](https://github.com/code-execute-rishi/PlayBillingWrapper/actions/workflows/ci.yml)
+[![Release](https://github.com/code-execute-rishi/PlayBillingWrapper/actions/workflows/release.yml/badge.svg)](https://github.com/code-execute-rishi/PlayBillingWrapper/actions/workflows/release.yml)
 [![JitPack](https://jitpack.io/v/code-execute-rishi/PlayBillingWrapper.svg)](https://jitpack.io/#code-execute-rishi/PlayBillingWrapper)
 [![API](https://img.shields.io/badge/API-23%2B-brightgreen.svg)](https://android-arsenal.com/api?level=23)
 [![Billing](https://img.shields.io/badge/Play%20Billing-8.3.0-blue.svg)](https://developer.android.com/google/play/billing/release-notes)
