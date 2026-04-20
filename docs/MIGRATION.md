@@ -61,7 +61,7 @@ Switch the dependency coordinate:
 
 ```diff
 - implementation 'com.github.moisoni97:google-inapp-billing:1.1.8'
-+ implementation 'com.github.code-execute-rishi:PlayBillingWrapper:v0.1.4'
++ implementation 'com.github.code-execute-rishi:PlayBillingWrapper:v0.1.5'
 ```
 
 Both libraries use `com.android.billingclient:billing:8.3.0`, so you don't need to change

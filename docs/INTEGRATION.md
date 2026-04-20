@@ -28,7 +28,7 @@ dependencyResolutionManagement {
 
 ```gradle
 dependencies {
-    implementation 'com.github.code-execute-rishi:PlayBillingWrapper:v0.1.4'
+    implementation 'com.github.code-execute-rishi:PlayBillingWrapper:v0.1.5'
 }
 ```
 
