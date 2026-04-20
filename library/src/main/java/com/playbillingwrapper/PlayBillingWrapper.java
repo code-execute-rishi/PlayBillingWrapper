@@ -259,13 +259,19 @@ public final class PlayBillingWrapper implements BillingEventListener {
 
     @Override
     public void onProductsFetched(@NonNull List<ProductInfo> productDetails) {
-        WrapperListener l = listener;
-        if (l != null) l.onReady();
+        // Intentionally quiet -- onReady() fires once, after purchase reconciliation completes.
+        // Firing here would expose stale/empty ownership to callers.
     }
 
     @Override
     public void onPurchasedProductsFetched(@NonNull ProductType productType, @NonNull List<PurchaseInfo> purchases) {
         dispatchPurchases(purchases);
+        // Fire onReady exactly once, after the final INAPP+SUBS query completes. Until then,
+        // hasLifetime()/monthlyState()/yearlyState() would give stale answers.
+        if (connector.isPurchaseReconciliationComplete()) {
+            WrapperListener l = listener;
+            if (l != null) l.onReady();
+        }
     }
 
     @Override
@@ -275,12 +281,14 @@ public final class PlayBillingWrapper implements BillingEventListener {
 
     @Override
     public void onPurchaseAcknowledged(@NonNull PurchaseInfo purchase) {
-        idemStore.markHandled(purchase.getPurchaseToken());
+        // No-op: delivery was already recorded in dispatchPurchases(). Acknowledgement is a
+        // separate Play lifecycle step and does not gate idempotency -- see the note there.
     }
 
     @Override
     public void onPurchaseConsumed(@NonNull PurchaseInfo purchase) {
-        idemStore.markHandled(purchase.getPurchaseToken());
+        // See note in onPurchaseAcknowledged. Consumables not part of the three shapes we
+        // surface, but the callback is still plumbed for callers of rawConnector().
     }
 
     @Override
@@ -316,13 +324,19 @@ public final class PlayBillingWrapper implements BillingEventListener {
             if (!p.isPurchased()) continue;
             if (idemStore.isHandled(p.getPurchaseToken())) continue;
 
+            // Record delivery BEFORE firing the grant callback. Otherwise an unacknowledged
+            // purchase (e.g. autoAcknowledge=false + server-side ack) can be redelivered on
+            // restart/restore and fire the callback twice. Callers that choose to reject the
+            // grant (failed server verification, etc.) must call
+            // {@code rawConnector()} / {@code IdempotencyStore#forget(token)} explicitly.
+            idemStore.markHandled(p.getPurchaseToken());
+
             if (p.getSkuProductType() == SkuProductType.SUBSCRIPTION) {
                 SubscriptionState state = computeSubscriptionState(p);
                 l.onSubscriptionActivated(p.getProduct(), state, p);
             } else {
                 l.onLifetimePurchased(p);
             }
-            if (p.isAcknowledged()) idemStore.markHandled(p.getPurchaseToken());
         }
     }
 
@@ -346,25 +360,20 @@ public final class PlayBillingWrapper implements BillingEventListener {
         return SubscriptionState.EXPIRED;
     }
 
+    /**
+     * Client-side state derivation. Purposefully conservative -- we do NOT attempt to infer
+     * IN_TRIAL from the product catalog because the catalog merely lists which offers are
+     * available to new purchases, not which pricing phase the current Purchase is in. That
+     * mapping requires the Google Play Developer API (server-side). Callers that need
+     * IN_TRIAL / GRACE_PERIOD / ON_HOLD / PAUSED distinctions should run a backend and
+     * consult {@code subscriptionsv2.get}.
+     */
     @NonNull
     private SubscriptionState computeSubscriptionState(@NonNull PurchaseInfo info) {
         Purchase p = info.getPurchase();
         if (p.getPurchaseState() == Purchase.PurchaseState.PENDING) return SubscriptionState.PENDING;
         if (!p.isAutoRenewing()) return SubscriptionState.CANCELED_ACTIVE;
-        if (isInFreeTrialPhase(info)) return SubscriptionState.IN_TRIAL;
         return SubscriptionState.ACTIVE;
-    }
-
-    private boolean isInFreeTrialPhase(@NonNull PurchaseInfo info) {
-        ProductDetails details = info.getProductInfo().getProductDetails();
-        List<ProductDetails.SubscriptionOfferDetails> offers = details.getSubscriptionOfferDetails();
-        if (offers == null) return false;
-        for (ProductDetails.SubscriptionOfferDetails offer : offers) {
-            for (ProductDetails.PricingPhase phase : offer.getPricingPhases().getPricingPhaseList()) {
-                if (phase.getPriceAmountMicros() == 0L) return true;
-            }
-        }
-        return false;
     }
 
     private static boolean hasEntitlement(@NonNull SubscriptionState s) {

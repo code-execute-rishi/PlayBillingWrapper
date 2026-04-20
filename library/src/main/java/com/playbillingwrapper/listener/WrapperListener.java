@@ -22,7 +22,7 @@ public interface WrapperListener {
     /** A one-time product (lifetime) became owned. */
     default void onLifetimePurchased(@NonNull PurchaseInfo purchase) { }
 
-    /** A subscription became active. {@code state} may be {@link SubscriptionState#IN_TRIAL}. */
+    /** A subscription became active. */
     default void onSubscriptionActivated(@NonNull String productId,
                                          @NonNull SubscriptionState state,
                                          @NonNull PurchaseInfo purchase) { }

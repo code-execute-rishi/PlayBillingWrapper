@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased (post-review hardening)
+
+Fixes surfaced by a manual correctness review of 0.1.1.
+
+### Critical
+
+- **Failed `queryPurchasesAsync` branches now decrement the outstanding counter and surface
+  the `BillingResult` to the listener.** Previously a single failed INAPP or SUBS query left
+  `fetchedPurchasedProducts == false` forever; `isPurchased(...)` would keep returning
+  `PURCHASED_PRODUCTS_NOT_FETCHED_YET` even after the other query succeeded.
+- **Pending purchases are auto-retried.** Every `PurchaseInfo` reported in `PENDING` state —
+  whether from `queryPurchasesAsync` on reconnect or live from `onPurchasesUpdated` — now
+  schedules `retryPurchaseWithBackoff` automatically. Previously the retry existed but was
+  only invoked if the caller explicitly called `rawConnector().retryPendingPurchase()`.
+- **Idempotency ledger records delivery _before_ the grant callback.** A purchase that is
+  delivered but never acknowledged (autoAcknowledge=false + server-side ack flow) used to
+  be redelivered on restart or restore, double-firing `onLifetimePurchased` /
+  `onSubscriptionActivated`. Tokens are now marked handled the moment the callback fires;
+  callers that reject the grant (e.g. server verification failed) should call
+  `IdempotencyStore#forget(token)`.
+
+### Important
+
+- **Dropped catalog-inferred `IN_TRIAL`.** The old heuristic scanned the product catalog
+  for any offer with a zero-price phase, which mislabeled paid renewals as in-trial
+  whenever Play still exposed a trial offer. The enum value is retained but deprecated
+  and never returned; purchased + auto-renewing now maps to `ACTIVE`. Backends that need
+  the trial/paid distinction must consult `subscriptionsv2.get`.
+- **`onReady()` now fires exactly once, after purchase reconciliation completes.**
+  Previously it fired per product-details batch (potentially twice when both INAPP and
+  SUBS were configured) before ownership had been loaded, so callers reading
+  `hasLifetime()` / `monthlyState()` inside the callback saw stale state.
+- **`BillingConnector` callbacks are null-safe post-`release()`.** All `billingEventListener.onX(...)`
+  dispatches route through `safe()`, which returns a no-op listener once `released` is set,
+  so in-flight async BillingClient callbacks can't NPE on a destroyed caller.
+
+### Tooling
+
+- Added JUnit/Mockito/Robolectric test module.
+- First real unit tests: 11 for `OfferSelector` (trial preference, base-plan fallback,
+  eligibility detection, offerId override), 6 for `IdempotencyStore` (persistence across
+  instances, forget, clearAll, idempotent marks).
+- Suppressed the benign AGP 8.7.3 / compileSdk 36 warning via
+  `android.suppressUnsupportedCompileSdk=36` until AGP 8.13+ can ship with Gradle 8.13+.
+
 ## 0.1.1 — 2026-04-21
 
 ### Fixed (post-review)

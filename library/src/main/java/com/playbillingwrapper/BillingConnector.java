@@ -119,6 +119,30 @@ public class BillingConnector implements DefaultLifecycleObserver {
 
     private volatile boolean isConnected = false;
     private volatile boolean fetchedPurchasedProducts = false;
+    private volatile boolean released = false;
+
+    /** Drop-in no-op listener used after release() so posted lambdas cannot NPE. */
+    private static final BillingEventListener NOOP_LISTENER = new BillingEventListener() {
+        @Override public void onProductsFetched(@NonNull List<ProductInfo> productDetails) { }
+        @Override public void onPurchasedProductsFetched(@NonNull ProductType productType, @NonNull List<PurchaseInfo> purchases) { }
+        @Override public void onProductsPurchased(@NonNull List<PurchaseInfo> purchases) { }
+        @Override public void onPurchaseAcknowledged(@NonNull PurchaseInfo purchase) { }
+        @Override public void onPurchaseConsumed(@NonNull PurchaseInfo purchase) { }
+        @Override public void onBillingError(@NonNull BillingConnector billingConnector, @NonNull BillingResponse response) { }
+        @Override public void onProductQueryError(@NonNull String productId, @NonNull BillingResponse response) { }
+    };
+
+    /**
+     * Returns a never-null listener for dispatching events from callbacks. If the connector
+     * has been released or no listener was ever registered, a no-op is returned so posted
+     * lambdas cannot dereference a null and crash.
+     */
+    @NonNull
+    private BillingEventListener safe() {
+        if (released) return NOOP_LISTENER;
+        BillingEventListener l = billingEventListener;
+        return l == null ? NOOP_LISTENER : l;
+    }
 
     /**
      * BillingConnector public constructor
@@ -160,52 +184,52 @@ public class BillingConnector implements DefaultLifecycleObserver {
                 break;
             case USER_CANCELED:
                 Log("User pressed back or canceled a dialog." + " Response code: " + billingResult.getResponseCode());
-                findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                         new BillingResponse(ErrorType.USER_CANCELED, billingResult)));
                 break;
             case SERVICE_UNAVAILABLE:
                 Log("Network connection is down." + " Response code: " + billingResult.getResponseCode());
-                findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                         new BillingResponse(ErrorType.SERVICE_UNAVAILABLE, billingResult)));
                 break;
             case BILLING_UNAVAILABLE:
                 Log("Billing API version is not supported for the type requested." + " Response code: " + billingResult.getResponseCode());
-                findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                         new BillingResponse(ErrorType.BILLING_UNAVAILABLE, billingResult)));
                 break;
             case ITEM_UNAVAILABLE:
                 Log("Requested product is not available for purchase." + " Response code: " + billingResult.getResponseCode());
-                findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                         new BillingResponse(ErrorType.ITEM_UNAVAILABLE, billingResult)));
                 break;
             case DEVELOPER_ERROR:
                 Log("Invalid arguments provided to the API." + " Response code: " + billingResult.getResponseCode());
-                findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                         new BillingResponse(ErrorType.DEVELOPER_ERROR, billingResult)));
                 break;
             case ERROR:
                 Log("Fatal error during the API action." + " Response code: " + billingResult.getResponseCode());
-                findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                         new BillingResponse(ErrorType.ERROR, billingResult)));
                 break;
             case ITEM_ALREADY_OWNED:
                 Log("Failure to purchase since item is already owned." + " Response code: " + billingResult.getResponseCode());
-                findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                         new BillingResponse(ErrorType.ITEM_ALREADY_OWNED, billingResult)));
                 break;
             case ITEM_NOT_OWNED:
                 Log("Failure to consume since item is not owned." + " Response code: " + billingResult.getResponseCode());
-                findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                         new BillingResponse(ErrorType.ITEM_NOT_OWNED, billingResult)));
                 break;
             case SERVICE_DISCONNECTED:
                 Log("Initialization error: service disconnected/timeout. Trying to reconnect...");
-                findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                         new BillingResponse(ErrorType.CLIENT_DISCONNECTED, billingResult)));
                 break;
             case NETWORK_ERROR:
                 Log("Initialization error: service network error. Trying to reconnect...");
-                findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                         new BillingResponse(ErrorType.NETWORK_ERROR, billingResult)));
                 break;
             default:
@@ -332,7 +356,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
      */
     private boolean checkProductBeforeInteraction(String productId) {
         if (!isReady()) {
-            findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this, new BillingResponse(ErrorType.CLIENT_NOT_READY,
+            findUiHandler().post(() -> safe().onBillingError(BillingConnector.this, new BillingResponse(ErrorType.CLIENT_NOT_READY,
                     "Client is not ready yet", defaultResponseCode)));
             return false;
         }
@@ -348,7 +372,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
         }
 
         if (productId != null && !productExists) {
-            findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this, new BillingResponse(ErrorType.PRODUCT_NOT_EXIST,
+            findUiHandler().post(() -> safe().onBillingError(BillingConnector.this, new BillingResponse(ErrorType.PRODUCT_NOT_EXIST,
                     "The product ID: " + productId + " doesn't seem to exist on Play Console", defaultResponseCode)));
             return false;
         }
@@ -360,7 +384,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
      */
     public final BillingConnector connect() {
         if (!isPlayStoreInstalled(context)) {
-            findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this, new BillingResponse(ErrorType.PLAY_STORE_NOT_INSTALLED,
+            findUiHandler().post(() -> safe().onBillingError(BillingConnector.this, new BillingResponse(ErrorType.PLAY_STORE_NOT_INSTALLED,
                     "Google Play Store is not installed", BILLING_UNAVAILABLE)));
             return this;
         }
@@ -418,7 +442,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
                 public void onBillingServiceDisconnected() {
                     isConnected = false;
 
-                    findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this, new BillingResponse(ErrorType.CLIENT_DISCONNECTED,
+                    findUiHandler().post(() -> safe().onBillingError(BillingConnector.this, new BillingResponse(ErrorType.CLIENT_DISCONNECTED,
                             "Billing service: disconnected", defaultResponseCode)));
 
                     Log("Billing service: Trying to reconnect...");
@@ -515,7 +539,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
                     if (!foundProductIds.contains(productId)) {
                         Log("Error: Product ID '" + productId + "' not found. " +
                                 "Make sure it is configured correctly in the Play Console");
-                        findUiHandler().post(() -> billingEventListener.onProductQueryError(productId, new BillingResponse(ErrorType.PRODUCT_ID_QUERY_FAILED,
+                        findUiHandler().post(() -> safe().onProductQueryError(productId, new BillingResponse(ErrorType.PRODUCT_ID_QUERY_FAILED,
                                 "Product ID '" + productId + "' not found", defaultResponseCode)
                         ));
                     }
@@ -523,7 +547,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
 
                 if (productDetailsList.isEmpty()) {
                     Log("Query Product Details: No valid products found. Make sure product IDs are configured on Play Console");
-                    findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this, new BillingResponse(ErrorType.BILLING_ERROR,
+                    findUiHandler().post(() -> safe().onBillingError(BillingConnector.this, new BillingResponse(ErrorType.BILLING_ERROR,
                             "No products found", defaultResponseCode)));
                     // Still decrement so the sibling INAPP/SUBS query can drive purchase reconciliation.
                     if (productDetailsQueriesPending.decrementAndGet() == 0) {
@@ -544,7 +568,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
                     switch (productType) {
                         case INAPP:
                         case SUBS:
-                            findUiHandler().post(() -> billingEventListener.onProductsFetched(fetchedProductInfo));
+                            findUiHandler().post(() -> safe().onProductsFetched(fetchedProductInfo));
                             break;
                         default:
                             throw new IllegalStateException("Product type is not implemented");
@@ -556,7 +580,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
                 }
             } else {
                 Log("Query Product Details: failed with response code: " + billingResult.getResponseCode());
-                findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                         new BillingResponse(ErrorType.BILLING_ERROR, billingResult)));
 
                 // Unblock the pipeline even if this specific query failed (API response code is not OK)
@@ -618,15 +642,12 @@ public class BillingConnector implements DefaultLifecycleObserver {
                     QueryPurchasesParams.newBuilder().setProductType(INAPP).build(),
                     (billingResult, purchases) -> {
                         if (billingResult.getResponseCode() == OK) {
-                            if (purchases.isEmpty()) {
-                                Log("Query IN-APP Purchases: the list is empty");
-                            } else {
-                                Log("Query IN-APP Purchases: data found and progress");
-                            }
-
+                            Log("Query IN-APP Purchases: " + (purchases.isEmpty() ? "empty" : purchases.size() + " found"));
                             processPurchases(ProductType.INAPP, purchases, true);
                         } else {
-                            Log("Query IN-APP Purchases: failed");
+                            Log("Query IN-APP Purchases: failed - " + billingResult.getDebugMessage());
+                            notifyBillingResultError(billingResult);
+                            completePurchaseQuery();
                         }
                     }
             );
@@ -637,22 +658,19 @@ public class BillingConnector implements DefaultLifecycleObserver {
                         QueryPurchasesParams.newBuilder().setProductType(SUBS).build(),
                         (billingResult, purchases) -> {
                             if (billingResult.getResponseCode() == OK) {
-                                if (purchases.isEmpty()) {
-                                    Log("Query SUBS Purchases: the list is empty");
-                                } else {
-                                    Log("Query SUBS Purchases: data found and progress");
-                                }
-
+                                Log("Query SUBS Purchases: " + (purchases.isEmpty() ? "empty" : purchases.size() + " found"));
                                 processPurchases(ProductType.SUBS, purchases, true);
                             } else {
-                                Log("Query SUBS Purchases: failed");
+                                Log("Query SUBS Purchases: failed - " + billingResult.getDebugMessage());
+                                notifyBillingResultError(billingResult);
+                                completePurchaseQuery();
                             }
                         }
                 );
             }
 
         } else {
-            findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this, new BillingResponse(ErrorType.FETCH_PURCHASED_PRODUCTS_ERROR,
+            findUiHandler().post(() -> safe().onBillingError(BillingConnector.this, new BillingResponse(ErrorType.FETCH_PURCHASED_PRODUCTS_ERROR,
                     "Billing client is not ready yet", defaultResponseCode)));
         }
     }
@@ -734,12 +752,18 @@ public class BillingConnector implements DefaultLifecycleObserver {
         }
 
         if (purchasedProductsFetched) {
-            findUiHandler().post(() -> billingEventListener.onPurchasedProductsFetched(productType, signatureValidPurchases));
-            if (purchaseQueriesPending.decrementAndGet() == 0) {
-                fetchedPurchasedProducts = true;
-            }
+            findUiHandler().post(() -> safe().onPurchasedProductsFetched(productType, signatureValidPurchases));
+            completePurchaseQuery();
         } else {
-            findUiHandler().post(() -> billingEventListener.onProductsPurchased(signatureValidPurchases));
+            findUiHandler().post(() -> safe().onProductsPurchased(signatureValidPurchases));
+            // Also honor any PENDING entries that came in via PurchasesUpdatedListener so
+            // the caller doesn't need to manually call retryPendingPurchase().
+            for (PurchaseInfo info : signatureValidPurchases) {
+                if (info.isPending()) {
+                    Log("Auto-scheduling pending-purchase retry (live flow) for: " + info.getProduct());
+                    retryPurchaseWithBackoff(info, 0, System.currentTimeMillis());
+                }
+            }
         }
 
         for (PurchaseInfo purchaseInfo : signatureValidPurchases) {
@@ -773,11 +797,11 @@ public class BillingConnector implements DefaultLifecycleObserver {
                             synchronized (purchasedProductsSync) {
                                 purchasedProductsList.remove(purchaseInfo);
                             }
-                            findUiHandler().post(() -> billingEventListener.onPurchaseConsumed(purchaseInfo));
+                            findUiHandler().post(() -> safe().onPurchaseConsumed(purchaseInfo));
                         } else {
                             Log("Handling consumables: error during consumption attempt: " + billingResult.getDebugMessage());
 
-                            findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                            findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                                     new BillingResponse(ErrorType.CONSUME_ERROR, billingResult)));
                         }
                     });
@@ -785,7 +809,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
                     Log("Handling consumables: purchase can not be consumed because the state is PENDING. " +
                             "A purchase can be consumed only when the state is PURCHASED");
 
-                    findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this, new BillingResponse(ErrorType.CONSUME_WARNING,
+                    findUiHandler().post(() -> safe().onBillingError(BillingConnector.this, new BillingResponse(ErrorType.CONSUME_WARNING,
                             "Warning: purchase can not be consumed because the state is PENDING. Please consume the purchase later", defaultResponseCode)));
                 }
             }
@@ -809,11 +833,11 @@ public class BillingConnector implements DefaultLifecycleObserver {
 
                             billingClient.acknowledgePurchase(acknowledgePurchaseParams, billingResult -> {
                                 if (billingResult.getResponseCode() == OK) {
-                                    findUiHandler().post(() -> billingEventListener.onPurchaseAcknowledged(purchaseInfo));
+                                    findUiHandler().post(() -> safe().onPurchaseAcknowledged(purchaseInfo));
                                 } else {
                                     Log("Handling acknowledges: error during acknowledgment attempt: " + billingResult.getDebugMessage());
 
-                                    findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                                    findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                                             new BillingResponse(ErrorType.ACKNOWLEDGE_ERROR, billingResult)));
                                 }
                             });
@@ -822,7 +846,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
                         Log("Handling acknowledges: purchase can not be acknowledged because the state is PENDING. " +
                                 "A purchase can be acknowledged only when the state is PURCHASED");
 
-                        findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this, new BillingResponse(ErrorType.ACKNOWLEDGE_WARNING,
+                        findUiHandler().post(() -> safe().onBillingError(BillingConnector.this, new BillingResponse(ErrorType.ACKNOWLEDGE_WARNING,
                                 "Warning: purchase can not be acknowledged because the state is PENDING. Please acknowledge the purchase later", defaultResponseCode)));
                     }
                     break;
@@ -848,7 +872,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
      */
     public final void purchaseSubscription(Activity activity, String productId, String offerToken) {
         if (offerToken == null || offerToken.isEmpty()) {
-            findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+            findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                     new BillingResponse(ErrorType.DEVELOPER_ERROR,
                             "offerToken must not be null/empty for subscription purchases. " +
                                     "Use OfferSelector to pick a token.", defaultResponseCode)));
@@ -882,7 +906,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
 
                     if (resolvedToken == null) {
                         Log("No offer token resolved for subscription: " + productId);
-                        findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                        findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                                 new BillingResponse(ErrorType.DEVELOPER_ERROR,
                                         "No valid offer token for subscription " + productId, defaultResponseCode)));
                         return;
@@ -915,12 +939,12 @@ public class BillingConnector implements DefaultLifecycleObserver {
                     // must surface the error ourselves.
                     Log("launchBillingFlow returned non-OK: " + launchResult.getResponseCode()
                             + " — " + launchResult.getDebugMessage());
-                    findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this,
+                    findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
                             new BillingResponse(ErrorType.BILLING_ERROR, launchResult)));
                 }
             } else {
                 Log("Billing client can not launch billing flow because product details are missing for product: " + productId);
-                findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this, new BillingResponse(ErrorType.PRODUCT_NOT_EXIST,
+                findUiHandler().post(() -> safe().onBillingError(BillingConnector.this, new BillingResponse(ErrorType.PRODUCT_NOT_EXIST,
                         "Product details not found for " + productId, defaultResponseCode)));
             }
         }
@@ -1192,7 +1216,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
         }
 
         // Notify the listener that the purchase was successful
-        findUiHandler().post(() -> billingEventListener.onProductsPurchased(Collections.singletonList(completedPurchaseInfo)));
+        findUiHandler().post(() -> safe().onProductsPurchased(Collections.singletonList(completedPurchaseInfo)));
 
         // Handle auto-consume for consumables
         if (shouldAutoConsume && originalInfo.getSkuProductType() == SkuProductType.CONSUMABLE) {
@@ -1203,7 +1227,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
                         purchasedProductsList.remove(completedPurchaseInfo);
                     }
                     findUiHandler().post(() ->
-                            billingEventListener.onPurchaseConsumed(completedPurchaseInfo));
+                            safe().onPurchaseConsumed(completedPurchaseInfo));
                 }
 
                 @Override
@@ -1218,7 +1242,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
                 @Override
                 public void onSuccess() {
                     findUiHandler().post(() ->
-                            billingEventListener.onPurchaseAcknowledged(completedPurchaseInfo));
+                            safe().onPurchaseAcknowledged(completedPurchaseInfo));
                 }
 
                 @Override
@@ -1268,7 +1292,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
      */
     private void handleConsumeFailure(@NonNull PurchaseInfo purchaseInfo) {
         Log("Consume failed for: " + purchaseInfo.getProduct());
-        findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this, new BillingResponse(ErrorType.CONSUME_ERROR,
+        findUiHandler().post(() -> safe().onBillingError(BillingConnector.this, new BillingResponse(ErrorType.CONSUME_ERROR,
                 "Failed to consume  purchase", defaultResponseCode)));
     }
 
@@ -1279,7 +1303,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
      */
     private void handleAcknowledgeFailure(@NonNull PurchaseInfo purchaseInfo) {
         Log("Acknowledge failed for: " + purchaseInfo.getProduct());
-        findUiHandler().post(() -> billingEventListener.onBillingError(BillingConnector.this, new BillingResponse(ErrorType.ACKNOWLEDGE_ERROR,
+        findUiHandler().post(() -> safe().onBillingError(BillingConnector.this, new BillingResponse(ErrorType.ACKNOWLEDGE_ERROR,
                 "Failed to acknowledge purchase", defaultResponseCode)));
     }
 
@@ -1308,12 +1332,48 @@ public class BillingConnector implements DefaultLifecycleObserver {
      * @param message   - descriptive error message
      */
     private void notifyBillingError(ErrorType errorType, String message) {
-        findUiHandler().post(() -> {
-            if (billingEventListener != null) {
-                billingEventListener.onBillingError(BillingConnector.this,
-                        new BillingResponse(errorType, message, defaultResponseCode));
+        findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
+                new BillingResponse(errorType, message, defaultResponseCode)));
+    }
+
+    /**
+     * Route an underlying {@link BillingResult} back to the listener as a generic billing
+     * error. Used in purchase-query failure paths where we only have the Play result.
+     */
+    private void notifyBillingResultError(@NonNull BillingResult billingResult) {
+        findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
+                new BillingResponse(ErrorType.BILLING_ERROR, billingResult)));
+    }
+
+    /**
+     * Called from each purchase-query completion path (success or failure). Decrements the
+     * outstanding counter. When all queries have completed, sets {@code fetchedPurchasedProducts}
+     * so callers can rely on {@code isPurchased(...)}, and auto-schedules retries for any
+     * purchases still in PENDING state.
+     */
+    private void completePurchaseQuery() {
+        if (purchaseQueriesPending.decrementAndGet() == 0) {
+            fetchedPurchasedProducts = true;
+            autoRetryPendingPurchases();
+        }
+    }
+
+    /**
+     * Schedule the pending-purchase retry loop for every PURCHASED-awaiting entry found in
+     * the reconciled purchase list. Safe to call multiple times -- the retry loop is idempotent
+     * via {@code verifyPurchaseState} + token equality.
+     */
+    private void autoRetryPendingPurchases() {
+        List<PurchaseInfo> snapshot;
+        synchronized (purchasedProductsSync) {
+            snapshot = new ArrayList<>(purchasedProductsList);
+        }
+        for (PurchaseInfo info : snapshot) {
+            if (info.isPending()) {
+                Log("Auto-scheduling pending-purchase retry for: " + info.getProduct());
+                retryPurchaseWithBackoff(info, 0, System.currentTimeMillis());
             }
-        });
+        }
     }
 
 
@@ -1431,6 +1491,15 @@ public class BillingConnector implements DefaultLifecycleObserver {
     /**
      * Returns a list of all purchased products.
      */
+    /**
+     * True once both the INAPP and SUBS {@code queryPurchasesAsync} callbacks have completed
+     * (success or failure). Use this to avoid reporting "ready" to higher layers before the
+     * owned-products list is authoritative.
+     */
+    public boolean isPurchaseReconciliationComplete() {
+        return fetchedPurchasedProducts;
+    }
+
     public List<PurchaseInfo> getPurchasedProductsList() {
         synchronized (purchasedProductsSync) {
             return Collections.unmodifiableList(new ArrayList<>(purchasedProductsList));
@@ -1517,6 +1586,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
      * To avoid leaks this method should be called when BillingConnector is no longer needed
      */
     public void release() {
+        released = true;
         if (billingClient != null && billingClient.isReady()) {
             Log("BillingConnector instance release: ending connection...");
             billingClient.endConnection();
