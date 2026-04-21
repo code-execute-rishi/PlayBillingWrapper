@@ -14,6 +14,13 @@ import com.playbillingwrapper.type.SkuProductType;
 public class PurchaseInfo {
 
     private final SkuProductType skuProductType;
+    /**
+     * May be {@code null} when the user owns a product for which Play did not return
+     * {@code ProductDetails} (e.g. a legacy / inactive / country-delisted SKU). In that
+     * case the product id / purchase state are still valid but accessors that depend on
+     * the product catalog (prices, pricing phases, trial period) are unavailable.
+     */
+    @androidx.annotation.Nullable
     private final ProductInfo productInfo;
     private final Purchase purchase;
 
@@ -36,12 +43,30 @@ public class PurchaseInfo {
 
     private final boolean isAcknowledged;
     private final boolean isAutoRenewing;
+    private final boolean isPaused;
 
     public PurchaseInfo(@NonNull ProductInfo productInfo, @NonNull Purchase purchase) {
+        this(productInfo, productInfo.getProduct(), productInfo.getSkuProductType(), purchase);
+    }
+
+    /**
+     * Constructor for owned purchases whose product catalog entry ({@code ProductInfo})
+     * is unavailable -- legacy, inactive, or country-delisted SKUs that Play still
+     * returns from {@code queryPurchasesAsync}. The caller must classify the SKU type
+     * externally (e.g. from the original registration lists).
+     */
+    public PurchaseInfo(@NonNull String productId, @NonNull SkuProductType type, @NonNull Purchase purchase) {
+        this(null, productId, type, purchase);
+    }
+
+    private PurchaseInfo(@androidx.annotation.Nullable ProductInfo productInfo,
+                         @NonNull String productId,
+                         @NonNull SkuProductType type,
+                         @NonNull Purchase purchase) {
         this.productInfo = productInfo;
         this.purchase = purchase;
-        this.product = productInfo.getProduct();
-        this.skuProductType = productInfo.getSkuProductType();
+        this.product = productId;
+        this.skuProductType = type;
         this.accountIdentifiers = purchase.getAccountIdentifiers();
         this.products = purchase.getProducts();
         this.orderId = purchase.getOrderId();
@@ -55,12 +80,14 @@ public class PurchaseInfo {
         this.purchaseTime = purchase.getPurchaseTime();
         this.isAcknowledged = purchase.isAcknowledged();
         this.isAutoRenewing = purchase.isAutoRenewing();
+        this.isPaused = purchase.isSuspended();
     }
 
     public SkuProductType getSkuProductType() {
         return skuProductType;
     }
 
+    @androidx.annotation.Nullable
     public ProductInfo getProductInfo() {
         return productInfo;
     }
@@ -115,6 +142,16 @@ public class PurchaseInfo {
 
     public long getPurchaseTime() {
         return purchaseTime;
+    }
+
+    /**
+     * True when this subscription purchase is currently paused by the user via Play
+     * (Play's {@code Purchase.isSuspended()} flag). Entitlement is revoked while paused;
+     * the user can resume from Play's manage-subscription page. Only meaningful for
+     * subscriptions; always false for one-time products.
+     */
+    public boolean isPaused() {
+        return isPaused;
     }
 
     public boolean isAcknowledged() {

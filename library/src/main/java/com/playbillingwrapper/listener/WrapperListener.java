@@ -3,8 +3,11 @@ package com.playbillingwrapper.listener;
 import androidx.annotation.NonNull;
 
 import com.playbillingwrapper.model.BillingResponse;
+import com.playbillingwrapper.model.ProductInfo;
 import com.playbillingwrapper.model.PurchaseInfo;
 import com.playbillingwrapper.status.SubscriptionState;
+
+import java.util.List;
 
 /**
  * Simpler, high-level listener for {@code PlayBillingWrapper}.
@@ -14,8 +17,19 @@ import com.playbillingwrapper.status.SubscriptionState;
 public interface WrapperListener {
 
     /**
-     * Fired once after products are fetched and ownership is reconciled, and again whenever
-     * the ownership state changes (new purchase, consumed item, restore, etc.).
+     * Fires as soon as {@code queryProductDetailsAsync} returns successfully -- before
+     * purchase reconciliation runs. Paywall UI that only needs prices
+     * ({@code getFormattedPrice(...)}) can render here instead of waiting for
+     * {@link #onReady()}. Fires once per INAPP / SUBS query batch, so for a catalog with
+     * both types it fires twice (once per batch).
+     */
+    default void onProductsFetched(@NonNull List<ProductInfo> products) { }
+
+    /**
+     * Fires after BOTH products and owned purchases have been fetched + reconciled.
+     * Safe to call {@code hasLifetime()} / {@code monthlyState()} / {@code isOwned(id)}
+     * from here. Fires exactly once per {@code connect()} / {@code restorePurchases()}
+     * cycle that completes successfully.
      */
     default void onReady() { }
 

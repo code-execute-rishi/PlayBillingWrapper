@@ -57,8 +57,17 @@ class Security {
      *                     is invalid
      */
     static private PublicKey generatePublicKey(String encodedPublicKey) throws IOException {
+        byte[] decodedKey;
         try {
-            byte[] decodedKey = Base64.decode(encodedPublicKey, Base64.DEFAULT);
+            // Base64.decode throws IllegalArgumentException (not IOException) on malformed
+            // input. Wrap so a misconfigured base64LicenseKey fails verification cleanly
+            // instead of crashing the purchase pipeline.
+            decodedKey = Base64.decode(encodedPublicKey, Base64.DEFAULT);
+        } catch (IllegalArgumentException e) {
+            Log.w(TAG, "Invalid base64 license key: " + e.getMessage());
+            throw new IOException("Malformed base64 license key", e);
+        }
+        try {
             KeyFactory keyFactory = KeyFactory.getInstance(KEY_FACTORY_ALGORITHM);
             return keyFactory.generatePublic(new X509EncodedKeySpec(decodedKey));
         } catch (NoSuchAlgorithmException e) {

@@ -100,6 +100,42 @@ public class SubscriptionOfferDetails {
             return recurrenceMode;
         }
 
+        /** True for a free-trial phase ({@code priceAmountMicros == 0}). */
+        public boolean isFree() {
+            return priceAmountMicros == 0L;
+        }
+
+        /**
+         * True for an intro-pricing phase: non-zero price, finite number of billing cycles.
+         * Maps to Play's {@code RecurrenceMode.FINITE_RECURRING}.
+         */
+        public boolean isIntro() {
+            return priceAmountMicros > 0L
+                    && recurrenceMode == com.android.billingclient.api.ProductDetails.RecurrenceMode.FINITE_RECURRING;
+        }
+
+        /**
+         * True for the base recurring phase (no cycle count limit).
+         * Maps to Play's {@code RecurrenceMode.INFINITE_RECURRING}.
+         */
+        public boolean isRecurring() {
+            return recurrenceMode == com.android.billingclient.api.ProductDetails.RecurrenceMode.INFINITE_RECURRING;
+        }
+
+        /** Alias for {@link #getBillingPeriod()} -- ISO 8601 string like {@code "P3D"}, {@code "P1M"}, {@code "P1Y"}. */
+        public String getPeriodIso() {
+            return billingPeriod;
+        }
+
+        /**
+         * This phase's billing period in milliseconds, computed from the ISO 8601 string.
+         * Months are approximated as 30 days, years as 365 days. Returns -1 for malformed
+         * input. Use the Play Developer API if you need calendar-exact durations.
+         */
+        public long getPeriodDurationMillis() {
+            return com.playbillingwrapper.PlayBillingWrapper.parseIso8601DurationMillis(billingPeriod);
+        }
+
         @Override
         public boolean equals(Object object) {
             if (this == object) return true;

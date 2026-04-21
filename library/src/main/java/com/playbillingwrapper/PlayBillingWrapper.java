@@ -138,6 +138,41 @@ public final class PlayBillingWrapper implements BillingEventListener {
         lastRestoreAt.set(System.currentTimeMillis());
     }
 
+    /**
+     * Splash / onboarding convenience. Starts a connection (if not already connected) and
+     * invokes {@code callback} on the main thread as soon as {@link #isReady()} returns
+     * true, OR after {@code timeoutMs} elapses -- whichever comes first. The callback
+     * always fires exactly once.
+     * <p>
+     * Typical use: gate a "Continue" button during onboarding on billing being ready, but
+     * fall through after 5s so a slow Play Services response doesn't block the app.
+     *
+     * <pre>
+     * billing.connect(5_000L, () -&gt; {
+     *     boolean ready = billing.isReady();
+     *     continueButton.setEnabled(true);
+     *     if (!ready) logTelemetry("billing_not_ready_timeout");
+     * });
+     * </pre>
+     */
+    public void connect(long timeoutMs, @NonNull Runnable callback) {
+        connect();
+        final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+        final long deadline = System.currentTimeMillis() + timeoutMs;
+        final Runnable[] tick = new Runnable[1];
+        final boolean[] fired = { false };
+        tick[0] = () -> {
+            if (fired[0]) return;
+            if (isReady() || System.currentTimeMillis() >= deadline) {
+                fired[0] = true;
+                callback.run();
+            } else {
+                handler.postDelayed(tick[0], 100L);
+            }
+        };
+        handler.post(tick[0]);
+    }
+
     public void release() {
         connector.release();
     }
@@ -178,11 +213,28 @@ public final class PlayBillingWrapper implements BillingEventListener {
      * {@link BillingConfig#lifetimeProductIds}.
      */
     public void purchaseProduct(@NonNull Activity activity, @NonNull String productId) {
+        purchaseProduct(activity, productId, null);
+    }
+
+    /**
+     * Play Billing v8 supports multiple purchase options per one-time product (e.g. a
+     * standard lifetime and a launch-discount lifetime as two options on the same SKU).
+     * Pass the {@code purchaseOptionId} configured in Play Console to route to a
+     * specific option; pass {@code null} to use the default option.
+     */
+    public void purchaseProduct(@NonNull Activity activity,
+                                @NonNull String productId,
+                                @Nullable String purchaseOptionId) {
         if (!config.lifetimeProductIds.contains(productId)) {
             reportError("purchaseProduct(): '" + productId + "' is not a registered lifetime product id.");
             return;
         }
-        connector.purchase(activity, productId);
+        analytics(a -> a.onBeginCheckout(productId, null, purchaseOptionId));
+        if (purchaseOptionId == null) {
+            connector.purchase(activity, productId);
+        } else {
+            connector.purchase(activity, productId, purchaseOptionId);
+        }
     }
 
     /**
@@ -195,6 +247,7 @@ public final class PlayBillingWrapper implements BillingEventListener {
             reportError("purchaseConsumable(): '" + productId + "' is not a registered consumable product id.");
             return;
         }
+        analytics(a -> a.onBeginCheckout(productId, null, null));
         connector.purchase(activity, productId);
     }
 
@@ -238,6 +291,7 @@ public final class PlayBillingWrapper implements BillingEventListener {
             reportError("No offer token resolved for " + spec.productId + " / " + spec.basePlanId);
             return;
         }
+        analytics(a -> a.onBeginCheckout(spec.productId, spec.basePlanId, spec.preferredOfferId));
         connector.changeSubscription(activity, spec.productId, offerToken, oldToken, mode.playReplacementMode);
     }
 
@@ -337,8 +391,13 @@ public final class PlayBillingWrapper implements BillingEventListener {
     }
 
     /**
-     * Subscription state for a specific {@code (productId, basePlanId)}. Returns
-     * {@link SubscriptionState#EXPIRED} if the user has no purchase for this product.
+     * Subscription state for {@code productId}. Play's client {@code Purchase} model
+     * does not expose which base plan a user is on, so this overload is an alias for
+     * {@link #subscriptionState(String)} kept for API symmetry with {@code getPricingPhases}
+     * etc. The {@code basePlanId} argument is ignored. A Play subscription product has
+     * at most one active purchase per account, so the product-level state is correct
+     * from the client's perspective. For per-base-plan distinctions you need the
+     * Google Play Developer API.
      */
     @NonNull
     public SubscriptionState subscriptionState(@NonNull String productId, @NonNull String basePlanId) {
@@ -421,6 +480,19 @@ public final class PlayBillingWrapper implements BillingEventListener {
         return OfferSelector.isTrialEligible(details, basePlanId);
     }
 
+    /**
+     * Convenience: true if ANY registered {@link SubscriptionSpec} for {@code productId}
+     * has an eligible free-trial offer. Useful when the caller doesn't care about the
+     * specific base plan -- 90% of paywalls want "can this SKU trial at all".
+     */
+    public boolean isTrialEligible(@NonNull String productId) {
+        for (SubscriptionSpec spec : config.subscriptions) {
+            if (!spec.productId.equals(productId)) continue;
+            if (isTrialEligible(spec.productId, spec.basePlanId)) return true;
+        }
+        return false;
+    }
+
     /** Legacy: trial eligibility for the default yearly spec. */
     public boolean isTrialEligibleForYearly() {
         if (config.defaultYearlySpec == null) return false;
@@ -458,18 +530,23 @@ public final class PlayBillingWrapper implements BillingEventListener {
     }
 
     /**
-     * Estimated trial-end wall clock millis for a subscription purchase. Computes
-     * {@code purchase.getPurchaseTime() + isoPeriodMillis(trialPeriod)}. Returns -1 if the
-     * purchase is not a subscription, is in PENDING, or the product has no trial offer.
-     * This is a client-side estimate; for authoritative expiry use the Play Developer API.
+     * Estimated trial-end wall clock millis for a subscription purchase on a specific
+     * {@code basePlanId}. Pass the base plan the user actually bought -- Play's client
+     * {@code Purchase} does not expose which one was selected, so the caller must know.
+     * Returns {@code -1} if the purchase is not a subscription, is in PENDING, lacks a
+     * ProductInfo (legacy / inactive SKU), or has no trial offer on the given base plan.
+     * Client-side estimate; authoritative expiry comes from the Play Developer API.
      */
-    public long getTrialEndMillis(@NonNull PurchaseInfo purchase) {
+    public long getTrialEndMillis(@NonNull PurchaseInfo purchase, @NonNull String basePlanId) {
         if (purchase.getSkuProductType() != SkuProductType.SUBSCRIPTION) return -1;
         if (!purchase.isPurchased()) return -1;
-        ProductDetails details = purchase.getProductInfo().getProductDetails();
+        ProductInfo info = purchase.getProductInfo();
+        if (info == null) return -1;
+        ProductDetails details = info.getProductDetails();
         List<ProductDetails.SubscriptionOfferDetails> offers = details.getSubscriptionOfferDetails();
         if (offers == null) return -1;
         for (ProductDetails.SubscriptionOfferDetails offer : offers) {
+            if (!basePlanId.equals(offer.getBasePlanId())) continue;
             if (offer.getOfferId() == null) continue;
             for (ProductDetails.PricingPhase phase : offer.getPricingPhases().getPricingPhaseList()) {
                 if (phase.getPriceAmountMicros() == 0L) {
@@ -478,6 +555,21 @@ public final class PlayBillingWrapper implements BillingEventListener {
                     return purchase.getPurchaseTime() + periodMs;
                 }
             }
+        }
+        return -1;
+    }
+
+    /**
+     * Convenience overload that scans every registered {@link SubscriptionSpec} for
+     * {@code purchase.getProduct()} and returns the first trial-end estimate it can
+     * compute. Ambiguous when a product has multiple base plans with different trial
+     * lengths -- prefer {@link #getTrialEndMillis(PurchaseInfo, String)} in that case.
+     */
+    public long getTrialEndMillis(@NonNull PurchaseInfo purchase) {
+        for (SubscriptionSpec spec : config.subscriptions) {
+            if (!spec.productId.equals(purchase.getProduct())) continue;
+            long est = getTrialEndMillis(purchase, spec.basePlanId);
+            if (est > 0) return est;
         }
         return -1;
     }
@@ -521,7 +613,36 @@ public final class PlayBillingWrapper implements BillingEventListener {
      * preferred when eligible, otherwise the base plan offer). Returns {@code null} if
      * products haven't fetched yet. Useful for intro-pricing UI:
      * {@code "Free for 3 days, then $3.99/month"}.
+     * <p>
+     * Returns the library's typed {@link com.playbillingwrapper.model.SubscriptionOfferDetails.PricingPhases}
+     * wrapper so your paywall does not import {@code com.android.billingclient.api.ProductDetails.PricingPhase}
+     * directly. The wrapper exposes {@code isFree()} / {@code isIntro()} /
+     * {@code isRecurring()} / {@code getPeriodIso()} / {@code getPeriodDurationMillis()} helpers.
      */
+    @Nullable
+    public List<com.playbillingwrapper.model.SubscriptionOfferDetails.PricingPhases> getOfferPhases(
+            @NonNull String productId, @NonNull String basePlanId) {
+        List<ProductDetails.PricingPhase> raw = getPricingPhases(productId, basePlanId);
+        if (raw == null) return null;
+        List<com.playbillingwrapper.model.SubscriptionOfferDetails.PricingPhases> out = new java.util.ArrayList<>(raw.size());
+        for (ProductDetails.PricingPhase p : raw) {
+            out.add(new com.playbillingwrapper.model.SubscriptionOfferDetails.PricingPhases(
+                    p.getFormattedPrice(),
+                    p.getPriceAmountMicros(),
+                    p.getPriceCurrencyCode(),
+                    p.getBillingPeriod(),
+                    p.getBillingCycleCount(),
+                    p.getRecurrenceMode()));
+        }
+        return Collections.unmodifiableList(out);
+    }
+
+    /**
+     * @deprecated Prefer {@link #getOfferPhases(String, String)} which returns the
+     * library's typed wrapper and exposes {@code isFree()} / {@code isIntro()} /
+     * {@code isRecurring()} helpers. This method leaks the Play SDK type.
+     */
+    @Deprecated
     @Nullable
     public List<ProductDetails.PricingPhase> getPricingPhases(@NonNull String productId,
                                                               @NonNull String basePlanId) {
@@ -600,6 +721,20 @@ public final class PlayBillingWrapper implements BillingEventListener {
         return Collections.unmodifiableList(connector.getPurchasedProductsList());
     }
 
+    /**
+     * Single-match shortcut. Returns the currently-owned {@link PurchaseInfo} for
+     * {@code productId}, or {@code null} if the user does not own it. For subscriptions
+     * with multiple base plans (same product id), returns the first matching purchase
+     * in Play's order -- use {@link #getOwnedPurchases()} when you need to disambiguate.
+     */
+    @Nullable
+    public PurchaseInfo getOwnedPurchase(@NonNull String productId) {
+        for (PurchaseInfo p : connector.getPurchasedProductsList()) {
+            if (productId.equals(p.getProduct())) return p;
+        }
+        return null;
+    }
+
     @NonNull
     public BillingConnector rawConnector() { return connector; }
 
@@ -614,12 +749,30 @@ public final class PlayBillingWrapper implements BillingEventListener {
     @NonNull
     public IdempotencyStore getIdempotencyStore() { return idemStore; }
 
+    /**
+     * Invoke a {@link com.playbillingwrapper.listener.BillingAnalytics} hook if one is
+     * registered. No-op otherwise. Uses a tiny local functional interface instead of
+     * {@code java.util.function.Consumer} because that requires API 24 and our minSdk
+     * is 23 (core-library desugaring is not assumed in consumer apps).
+     */
+    private interface AnalyticsAction {
+        void invoke(@NonNull com.playbillingwrapper.listener.BillingAnalytics a);
+    }
+
+    private void analytics(@NonNull AnalyticsAction action) {
+        com.playbillingwrapper.listener.BillingAnalytics a = config.analyticsListener;
+        if (a != null) action.invoke(a);
+    }
+
     // ---------------------------------------------------------------------
     //  BillingEventListener bridge
     // ---------------------------------------------------------------------
 
     @Override
-    public void onProductsFetched(@NonNull List<ProductInfo> productDetails) { }
+    public void onProductsFetched(@NonNull List<ProductInfo> productDetails) {
+        WrapperListener l = listener;
+        if (l != null) l.onProductsFetched(productDetails);
+    }
 
     @Override
     public void onPurchasedProductsFetched(@NonNull ProductType productType, @NonNull List<PurchaseInfo> purchases) {
@@ -640,6 +793,7 @@ public final class PlayBillingWrapper implements BillingEventListener {
     @Override
     public void onPurchaseConsumed(@NonNull PurchaseInfo purchase) {
         WrapperListener l = listener;
+        analytics(a -> a.onConsumablePurchased(purchase.getProduct(), purchase.getQuantity(), purchase));
         if (l == null) return;
         // Consumable was bought AND consumed on Play's side. Grant the resource now.
         // NOTE: idempotency ledger uses the Play purchaseToken; a second purchase of the same
@@ -650,9 +804,13 @@ public final class PlayBillingWrapper implements BillingEventListener {
     @Override
     public void onBillingError(@NonNull BillingConnector billingConnector, @NonNull BillingResponse response) {
         WrapperListener l = listener;
-        if (l == null) return;
-        if (response.getErrorType() == ErrorType.USER_CANCELED) l.onUserCancelled();
-        else l.onError(response);
+        if (response.getErrorType() == ErrorType.USER_CANCELED) {
+            analytics(a -> a.onUserCancelled(""));
+            if (l != null) l.onUserCancelled();
+        } else {
+            analytics(a -> a.onError("", response));
+            if (l != null) l.onError(response);
+        }
     }
 
     @Override
@@ -679,6 +837,7 @@ public final class PlayBillingWrapper implements BillingEventListener {
                     ", preferredOfferId=" + spec.preferredOfferId + ")");
             return;
         }
+        analytics(a -> a.onBeginCheckout(spec.productId, spec.basePlanId, spec.preferredOfferId));
         connector.purchaseSubscription(activity, spec.productId, token);
     }
 
@@ -713,6 +872,7 @@ public final class PlayBillingWrapper implements BillingEventListener {
                         p.getPurchaseToken(), isAutoRenewing);
                 if (transitioned) {
                     l.onSubscriptionCancelled(p.getProduct(), p);
+                    analytics(a -> a.onSubscriptionCancelled(p.getProduct(), p));
                 }
             }
 
@@ -721,9 +881,28 @@ public final class PlayBillingWrapper implements BillingEventListener {
             idemStore.markHandled(p.getPurchaseToken());
 
             if (p.getSkuProductType() == SkuProductType.SUBSCRIPTION) {
-                l.onSubscriptionActivated(p.getProduct(), computeSubscriptionState(p), p);
+                SubscriptionState state = computeSubscriptionState(p);
+                l.onSubscriptionActivated(p.getProduct(), state, p);
+                analytics(a -> a.onSubscriptionActivated(p.getProduct(), state, p));
+                analytics(a -> a.onPurchaseCompleted(p.getProduct(), p));
+                // Trial-started event fires when the purchase has a free-phase trial
+                // and the purchase was just minted (first-time delivery path).
+                long trialEndMs = getTrialEndMillis(p);
+                if (trialEndMs > 0L) {
+                    // Recover ISO period so callers get the raw string too.
+                    String iso = null;
+                    for (SubscriptionSpec s : config.subscriptions) {
+                        if (s.productId.equals(p.getProduct())) {
+                            iso = getTrialPeriodIso(s.productId, s.basePlanId);
+                            if (iso != null) break;
+                        }
+                    }
+                    final String isoFinal = iso;
+                    analytics(a -> a.onTrialStarted(p.getProduct(), isoFinal, p));
+                }
             } else {
                 l.onLifetimePurchased(p);
+                analytics(a -> a.onPurchaseCompleted(p.getProduct(), p));
             }
         }
     }
@@ -751,6 +930,9 @@ public final class PlayBillingWrapper implements BillingEventListener {
     private SubscriptionState computeSubscriptionState(@NonNull PurchaseInfo info) {
         Purchase p = info.getPurchase();
         if (p.getPurchaseState() == Purchase.PurchaseState.PENDING) return SubscriptionState.PENDING;
+        // PAUSED is checked BEFORE isAutoRenewing because Play keeps auto-renew=true for
+        // paused subs (they resume automatically at the paused-until date).
+        if (p.isSuspended()) return SubscriptionState.PAUSED;
         if (!p.isAutoRenewing()) return SubscriptionState.CANCELED_ACTIVE;
         return SubscriptionState.ACTIVE;
     }
@@ -771,7 +953,7 @@ public final class PlayBillingWrapper implements BillingEventListener {
      * {@code PnD} (the forms Play uses for subscription billing periods). Returns -1 on
      * malformed input.
      */
-    static long parseIso8601DurationMillis(@Nullable String iso) {
+    public static long parseIso8601DurationMillis(@Nullable String iso) {
         if (iso == null || iso.length() < 3 || iso.charAt(0) != 'P') return -1;
         try {
             long n = Long.parseLong(iso.substring(1, iso.length() - 1));

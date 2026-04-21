@@ -21,7 +21,14 @@ final class AutoRenewStateStore {
     private static final String KEY_AUTO_RENEWING_TOKENS = "auto_renewing_tokens";
 
     private final SharedPreferences prefs;
-    private final Object lock = new Object();
+
+    /**
+     * Static lock shared across every {@code AutoRenewStateStore} instance in the
+     * process. Each instance reads / writes the same {@code SharedPreferences} file, so
+     * per-instance synchronization would let two wrappers interleave read-modify-write
+     * cycles and lose tokens -- suppressing or duplicating {@code onSubscriptionCancelled}.
+     */
+    private static final Object LOCK = new Object();
 
     AutoRenewStateStore(@NonNull Context context) {
         this.prefs = context.getApplicationContext()
@@ -34,7 +41,7 @@ final class AutoRenewStateStore {
      * observed not renewing).
      */
     boolean recordAndDetectCancellation(@NonNull String purchaseToken, boolean isAutoRenewing) {
-        synchronized (lock) {
+        synchronized (LOCK) {
             Set<String> set = prefs.getStringSet(KEY_AUTO_RENEWING_TOKENS, null);
             boolean wasRenewing = set != null && set.contains(purchaseToken);
             boolean transitioned = wasRenewing && !isAutoRenewing;
@@ -52,7 +59,7 @@ final class AutoRenewStateStore {
 
     /** Remove a token from the record (e.g. on refund / revoke). Tests use this too. */
     void forget(@NonNull String purchaseToken) {
-        synchronized (lock) {
+        synchronized (LOCK) {
             Set<String> set = prefs.getStringSet(KEY_AUTO_RENEWING_TOKENS, null);
             if (set == null || !set.contains(purchaseToken)) return;
             Set<String> copy = new HashSet<>(set);
@@ -62,7 +69,7 @@ final class AutoRenewStateStore {
     }
 
     void clearAll() {
-        synchronized (lock) {
+        synchronized (LOCK) {
             prefs.edit().remove(KEY_AUTO_RENEWING_TOKENS).commit();
         }
     }

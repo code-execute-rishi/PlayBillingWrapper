@@ -89,6 +89,41 @@ public class BillingConfigTest {
     }
 
     @Test
+    public void build_requires_userId() {
+        try {
+            BillingConfig.builder().addLifetimeProductId("com.app.x").build();
+            fail("missing userId should throw");
+        } catch (IllegalArgumentException expected) { /* ok */ }
+    }
+
+    @Test
+    public void build_rejects_oversized_userId() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 65; i++) sb.append('a');
+        try {
+            BillingConfig.builder()
+                    .addLifetimeProductId("com.app.x")
+                    .userId(sb.toString())
+                    .build();
+            fail("userId > 64 chars should throw");
+        } catch (IllegalArgumentException expected) { /* ok */ }
+    }
+
+    @Test
+    public void build_rejects_oversized_profileId() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 65; i++) sb.append('b');
+        try {
+            BillingConfig.builder()
+                    .addLifetimeProductId("com.app.x")
+                    .userId("hash")
+                    .profileId(sb.toString())
+                    .build();
+            fail("profileId > 64 chars should throw");
+        } catch (IllegalArgumentException expected) { /* ok */ }
+    }
+
+    @Test
     public void build_requires_at_least_one_product() {
         try {
             BillingConfig.builder().userId("hash").build();

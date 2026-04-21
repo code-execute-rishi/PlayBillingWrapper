@@ -88,6 +88,9 @@ public final class BillingConfig {
     public final boolean enableLogging;
     public final boolean autoAcknowledge;
 
+    /** Optional analytics bridge. Null means no events are forwarded. */
+    @Nullable public final com.playbillingwrapper.listener.BillingAnalytics analyticsListener;
+
     // ------------------------------------------------------------------
     // Back-compat exposed fields (populated from the sugar setters)
     // ------------------------------------------------------------------
@@ -111,6 +114,7 @@ public final class BillingConfig {
         this.base64LicenseKey = b.base64LicenseKey;
         this.enableLogging = b.enableLogging;
         this.autoAcknowledge = b.autoAcknowledge;
+        this.analyticsListener = b.analyticsListener;
 
         this.lifetimeProductId = b.defaultLifetimeProductId;
         this.monthlySubProductId = b.defaultMonthlySpec == null ? null : b.defaultMonthlySpec.productId;
@@ -145,6 +149,7 @@ public final class BillingConfig {
         private String base64LicenseKey;
         private boolean enableLogging = false;
         private boolean autoAcknowledge = true;
+        private com.playbillingwrapper.listener.BillingAnalytics analyticsListener;
 
         // ------------------------------------------------------------------
         //  Generic catalog API
@@ -292,6 +297,18 @@ public final class BillingConfig {
 
         public Builder autoAcknowledge(boolean enable) { this.autoAcknowledge = enable; return this; }
 
+        /**
+         * Install a {@link com.playbillingwrapper.listener.BillingAnalytics} hook that
+         * receives begin-checkout, purchase-completed, trial-started, subscription-
+         * cancelled, user-cancelled, and error events. Fires alongside the main
+         * {@code WrapperListener}; useful for forwarding to Firebase / Amplitude / Mixpanel
+         * without scattering bridge code across every paywall.
+         */
+        public Builder analyticsListener(@Nullable com.playbillingwrapper.listener.BillingAnalytics listener) {
+            this.analyticsListener = listener;
+            return this;
+        }
+
         public BillingConfig build() {
             // Resolve legacy monthly / yearly setters into real specs if the generic
             // defaultMonthly(...) / defaultYearly(...) wasn't used explicitly.
@@ -312,6 +329,23 @@ public final class BillingConfig {
 
             if (lifetimeProductIds.isEmpty() && consumableProductIds.isEmpty() && subscriptions.isEmpty()) {
                 throw new IllegalArgumentException("BillingConfig must declare at least one product (lifetime, consumable, or subscription)");
+            }
+            // userId() is documented as required for fraud binding, trial-per-account
+            // enforcement, and server-side token-to-user mapping. Fail fast at build() so
+            // callers see the mistake during wiring rather than at Play-dialog time.
+            if (obfuscatedAccountId == null || obfuscatedAccountId.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "BillingConfig.Builder.userId(...) is required. Pass a hashed, stable, " +
+                        "non-PII user id (<=64 chars). See README -> obfuscatedAccountId.");
+            }
+            if (obfuscatedAccountId.length() > 64) {
+                throw new IllegalArgumentException(
+                        "userId must be <=64 characters (Play's hard limit). Got " + obfuscatedAccountId.length() +
+                        ". Use a fixed-length hash like sha256(...) substring.");
+            }
+            if (obfuscatedProfileId != null && obfuscatedProfileId.length() > 64) {
+                throw new IllegalArgumentException(
+                        "profileId must be <=64 characters (Play's hard limit). Got " + obfuscatedProfileId.length() + ".");
             }
             return new BillingConfig(this);
         }

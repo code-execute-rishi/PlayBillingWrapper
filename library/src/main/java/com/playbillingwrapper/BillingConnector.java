@@ -117,6 +117,14 @@ public class BillingConnector implements DefaultLifecycleObserver {
     private final AtomicInteger productDetailsQueriesPending = new AtomicInteger(0);
     private final AtomicInteger purchaseQueriesPending = new AtomicInteger(0);
 
+    /**
+     * Pending-purchase tokens with an in-flight retry loop. Prevents a second retry
+     * scheduler from starting on the same token (which would reprocess the eventual
+     * completion and fire duplicate callbacks).
+     */
+    private final java.util.Set<String> activePendingRetryTokens =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+
     private boolean shouldAutoAcknowledge = false;
     private boolean shouldAutoConsume = false;
     private boolean shouldEnableLogging = false;
@@ -518,6 +526,10 @@ public class BillingConnector implements DefaultLifecycleObserver {
         // Reset the fetched cache so concurrent INAPP/SUBS callbacks both have a clean slate
         // to append into -- never wipe the sibling's results.
         fetchedProductInfoList.clear();
+        // Clear the "reconciliation complete" flag so onReady() doesn't fire mid-cycle
+        // using stale ownership from a previous restore. It is set to true again once
+        // both INAPP and SUBS purchase queries finish.
+        fetchedPurchasedProducts = false;
 
         int queryCount = 0;
         if (!productInAppList.isEmpty()) queryCount++;
@@ -658,6 +670,19 @@ public class BillingConnector implements DefaultLifecycleObserver {
         return new ProductInfo(skuProductType, productDetails);
     }
 
+    /**
+     * Best-effort SKU-type classification from the registered id lists. Returns null
+     * when the product is not in any registered list (in which case the purchase is
+     * dropped).
+     */
+    @Nullable
+    private SkuProductType classifyById(@NonNull String productId) {
+        if (consumableIds != null && consumableIds.contains(productId)) return SkuProductType.CONSUMABLE;
+        if (nonConsumableIds != null && nonConsumableIds.contains(productId)) return SkuProductType.NON_CONSUMABLE;
+        if (subscriptionIds != null && subscriptionIds.contains(productId)) return SkuProductType.SUBSCRIPTION;
+        return null;
+    }
+
     private boolean isProductIdConsumable(String productId) {
         if (consumableIds == null) {
             return false;
@@ -691,10 +716,15 @@ public class BillingConnector implements DefaultLifecycleObserver {
                     }
             );
 
-            // Query subscription purchases for supported devices
+            // Query subscription purchases for supported devices.
+            // includeSuspendedSubscriptions(true) surfaces user-paused subscriptions so
+            // the wrapper can emit SubscriptionState.PAUSED -- otherwise Play hides them.
             if (isSubscriptionSupported() == SupportState.SUPPORTED) {
                 billingClient.queryPurchasesAsync(
-                        QueryPurchasesParams.newBuilder().setProductType(SUBS).build(),
+                        QueryPurchasesParams.newBuilder()
+                                .setProductType(SUBS)
+                                .includeSuspendedSubscriptions(true)
+                                .build(),
                         (billingResult, purchases) -> {
                             if (billingResult.getResponseCode() == OK) {
                                 Log("Query SUBS Purchases: " + (purchases.isEmpty() ? "empty" : purchases.size() + " found"));
@@ -761,8 +791,18 @@ public class BillingConnector implements DefaultLifecycleObserver {
             for (String productId : purchase.getProducts()) {
                 ProductInfo foundProductInfo = productInfoMap.get(productId);
                 if (foundProductInfo != null) {
-                    PurchaseInfo purchaseInfo = new PurchaseInfo(foundProductInfo, purchase);
-                    signatureValidPurchases.add(purchaseInfo);
+                    signatureValidPurchases.add(new PurchaseInfo(foundProductInfo, purchase));
+                } else {
+                    // Legacy / inactive / country-delisted SKU: Play returned this owned
+                    // purchase but did not return ProductDetails for it. Still surface it
+                    // so entitlements and acknowledgments are not silently dropped.
+                    SkuProductType fallbackType = classifyById(productId);
+                    if (fallbackType == null) {
+                        Log("Owned product '" + productId + "' is not in any registered list; skipping.");
+                        continue;
+                    }
+                    Log("Surfacing owned purchase without ProductDetails: " + productId + " (" + fallbackType + ")");
+                    signatureValidPurchases.add(new PurchaseInfo(productId, fallbackType, purchase));
                 }
             }
         }
@@ -867,17 +907,16 @@ public class BillingConnector implements DefaultLifecycleObserver {
                 case SUBSCRIPTION:
                     if (purchaseInfo.getPurchase().getPurchaseState() == Purchase.PurchaseState.PURCHASED) {
                         if (!purchaseInfo.getPurchase().isAcknowledged()) {
-                            AcknowledgePurchaseParams acknowledgePurchaseParams = AcknowledgePurchaseParams.newBuilder()
-                                    .setPurchaseToken(purchaseInfo.getPurchase().getPurchaseToken()).build();
-
-                            billingClient.acknowledgePurchase(acknowledgePurchaseParams, billingResult -> {
-                                if (billingResult.getResponseCode() == OK) {
+                            // Normal auto-ack path runs through the same 3-retry exponential
+                            // backoff helper used for pending-purchase completions. A single
+                            // transient Play / network failure would otherwise leave the
+                            // purchase unacknowledged and eligible for 72h auto-refund.
+                            acknowledgePurchaseWithRetry(purchaseInfo, 0, 3, new AcknowledgeEventListener() {
+                                @Override public void onSuccess() {
                                     findUiHandler().post(() -> safe().onPurchaseAcknowledged(purchaseInfo));
-                                } else {
-                                    Log("Handling acknowledges: error during acknowledgment attempt: " + billingResult.getDebugMessage());
-
-                                    findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
-                                            new BillingResponse(ErrorType.ACKNOWLEDGE_ERROR, billingResult)));
+                                }
+                                @Override public void onFailure() {
+                                    handleAcknowledgeFailure(purchaseInfo);
                                 }
                             });
                         }
@@ -899,6 +938,24 @@ public class BillingConnector implements DefaultLifecycleObserver {
      */
     public final void purchase(Activity activity, String productId) {
         purchaseInternal(activity, productId, null, notAnOffer, null, 0);
+    }
+
+    /**
+     * Play Billing v8 supports multiple purchase options per one-time product (e.g. a
+     * standard lifetime + a launch-discount lifetime as two options on the same SKU).
+     * Pass the {@code purchaseOptionId} configured in Play Console to route to a specific
+     * option. If the productDetails has no matching option the call fires DEVELOPER_ERROR.
+     * <p>
+     * For the default option, use {@link #purchase(Activity, String)} with no id.
+     *
+     * @param activity          foreground Activity
+     * @param productId         Play Console product id
+     * @param purchaseOptionId  id of one entry in {@code ProductDetails.getOneTimePurchaseOfferDetailsList()}
+     */
+    public final void purchase(@NonNull Activity activity,
+                               @NonNull String productId,
+                               @NonNull String purchaseOptionId) {
+        purchaseInternal(activity, productId, null, notAnOffer, null, 0, purchaseOptionId);
     }
 
     /**
@@ -948,6 +1005,13 @@ public class BillingConnector implements DefaultLifecycleObserver {
 
     private void purchaseInternal(Activity activity, String productId, String offerToken, int legacyOfferIndex,
                                   @Nullable String oldPurchaseTokenForChange, int playReplacementMode) {
+        purchaseInternal(activity, productId, offerToken, legacyOfferIndex,
+                oldPurchaseTokenForChange, playReplacementMode, null);
+    }
+
+    private void purchaseInternal(Activity activity, String productId, String offerToken, int legacyOfferIndex,
+                                  @Nullable String oldPurchaseTokenForChange, int playReplacementMode,
+                                  @Nullable String oneTimePurchaseOptionId) {
         if (checkProductBeforeInteraction(productId)) {
             ProductInfo foundProductInfo = null;
             for (ProductInfo productInfo : fetchedProductInfoList) {
@@ -985,11 +1049,41 @@ public class BillingConnector implements DefaultLifecycleObserver {
                                     .build()
                     );
                 } else {
-                    productDetailsParamsList = Collections.singletonList(
+                    // One-time (lifetime / consumable). In Play Billing v8 a single SKU can
+                    // carry multiple purchase options via getOneTimePurchaseOfferDetailsList();
+                    // callers pick one by id. When oneTimePurchaseOptionId is null we use the
+                    // primary offer (getOneTimePurchaseOfferDetails() -- equivalent to the
+                    // "default" option).
+                    String resolvedOneTimeToken = null;
+                    if (oneTimePurchaseOptionId != null) {
+                        List<ProductDetails.OneTimePurchaseOfferDetails> options =
+                                productDetails.getOneTimePurchaseOfferDetailsList();
+                        if (options != null) {
+                            for (ProductDetails.OneTimePurchaseOfferDetails option : options) {
+                                if (oneTimePurchaseOptionId.equals(option.getPurchaseOptionId())) {
+                                    resolvedOneTimeToken = option.getOfferToken();
+                                    break;
+                                }
+                            }
+                        }
+                        if (resolvedOneTimeToken == null) {
+                            Log("No matching purchase option '" + oneTimePurchaseOptionId + "' for " + productId);
+                            findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
+                                    new BillingResponse(ErrorType.DEVELOPER_ERROR,
+                                            "purchaseOptionId '" + oneTimePurchaseOptionId + "' not found for '"
+                                                    + productId + "'. Check Play Console product options.",
+                                            defaultResponseCode)));
+                            return;
+                        }
+                    }
+
+                    BillingFlowParams.ProductDetailsParams.Builder oneTimeParams =
                             BillingFlowParams.ProductDetailsParams.newBuilder()
-                                    .setProductDetails(productDetails)
-                                    .build()
-                    );
+                                    .setProductDetails(productDetails);
+                    if (resolvedOneTimeToken != null) {
+                        oneTimeParams.setOfferToken(resolvedOneTimeToken);
+                    }
+                    productDetailsParamsList = Collections.singletonList(oneTimeParams.build());
                 }
 
                 BillingFlowParams.Builder flowBuilder = BillingFlowParams.newBuilder()
@@ -1092,7 +1186,14 @@ public class BillingConnector implements DefaultLifecycleObserver {
      * @param retryCount   - current retry attempt (starts at 0)
      */
     private void retryPurchaseWithBackoff(PurchaseInfo purchaseInfo, int retryCount, long startTime) {
+        // Dedupe: only one retry loop per purchaseToken in flight at a time.
+        String token = purchaseInfo.getPurchaseToken();
+        if (retryCount == 0 && !activePendingRetryTokens.add(token)) {
+            Log("Pending retry already in flight for: " + purchaseInfo.getProduct() + " (" + token + "); skipping duplicate.");
+            return;
+        }
         if (shouldStopRetrying(purchaseInfo, retryCount, startTime)) {
+            activePendingRetryTokens.remove(token);
             handleRetryFailure(purchaseInfo);
             return;
         }
@@ -1103,8 +1204,10 @@ public class BillingConnector implements DefaultLifecycleObserver {
 
         findUiHandler().postDelayed(() -> {
             boolean shouldContinue = verifyPurchaseState(purchaseInfo);
-            if (!shouldContinue) return;
-
+            if (!shouldContinue) {
+                activePendingRetryTokens.remove(token);
+                return;
+            }
             queryPurchasesForRetry(purchaseInfo, retryCount, startTime);
         }, delayMs);
     }
@@ -1156,6 +1259,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
         if (completedPurchase == null) {
             Log("Pending purchase not found, may have been canceled: " +
                     originalInfo.getProduct());
+            activePendingRetryTokens.remove(originalInfo.getPurchaseToken());
             notifyBillingError(ErrorType.PENDING_PURCHASE_CANCELED,
                     "Pending purchase may have been canceled");
             return;
@@ -1163,6 +1267,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
 
         if (completedPurchase.getPurchaseState() == Purchase.PurchaseState.PURCHASED) {
             Log("Pending purchase completed: " + originalInfo.getProduct());
+            activePendingRetryTokens.remove(originalInfo.getPurchaseToken());
             handleCompletedPurchase(originalInfo, completedPurchase);
         } else {
             retryPurchaseWithBackoff(originalInfo, retryCount + 1, startTime);
@@ -1618,7 +1723,9 @@ public class BillingConnector implements DefaultLifecycleObserver {
         } else {
             synchronized (purchasedProductsSync) {
                 for (PurchaseInfo purchaseInfo : purchasedProductsList) {
-                    if (purchaseInfo.getProduct().equals(productId)) {
+                    // PENDING purchases are not yet paid for; treat them as NOT owned so
+                    // callers don't grant entitlement for slow-payment methods.
+                    if (purchaseInfo.getProduct().equals(productId) && purchaseInfo.isPurchased()) {
                         return PurchasedResult.YES;
                     }
                 }

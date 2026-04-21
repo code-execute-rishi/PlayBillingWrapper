@@ -1,12 +1,13 @@
 package com.playbillingwrapper.status;
 
 /**
- * Lifecycle state of a subscription, computed strictly from local
- * {@link com.android.billingclient.api.Purchase} data. No server / RTDN signals are consumed.
+ * Lifecycle state of a subscription, computed from local
+ * {@link com.android.billingclient.api.Purchase} data.
  * <p>
- * Google's grace-period / on-hold / paused / in-trial states are not observable from the
- * client in a fully reliable way and are intentionally omitted. If your business depends on
- * them, run a backend and query the Google Play Developer API directly.
+ * {@link #PAUSED} is observable from the client when the purchase list is queried with
+ * {@code QueryPurchasesParams.Builder.includeSuspendedSubscriptions(true)} — the wrapper
+ * sets this automatically. The other server-side states (grace period, on hold, revoked)
+ * still require a backend + the Google Play Developer API.
  */
 public enum SubscriptionState {
 
@@ -18,6 +19,12 @@ public enum SubscriptionState {
      * Computed from {@code isAutoRenewing() == false} with the purchase still present.
      */
     CANCELED_ACTIVE,
+
+    /**
+     * User paused the subscription via Play. Entitlement is revoked until the user resumes.
+     * Computed from {@code Purchase.isSuspended() == true}.
+     */
+    PAUSED,
 
     /** Slow-payment method (cash, bank transfer) — not yet cleared. No entitlement. */
     PENDING,
