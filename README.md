@@ -952,7 +952,7 @@ the guarantee holds across app restart, reinstall on the same user, and cache cl
 
 ### Refund handling
 
-On refund / chargeback, call `billing.rawConnector().getIdempotencyStore().forget(token)`
+On refund / chargeback, call `billing.getIdempotencyStore().forget(token)`
 so a re-purchase with a recycled token is handled fresh. There is no built-in refund
 listener — you need a server and RTDN for that signal.
 
@@ -982,9 +982,14 @@ Common scenarios:
 
 ### Local JVM tests
 
-The library ships with 17 unit tests — 11 for `OfferSelector` (trial preference, base-plan
-fallback, offerId override, eligibility) and 6 for `IdempotencyStore` (persistence, forget,
-clearAll).
+The library ships with 43 unit tests across 6 suites:
+
+- `OfferSelectorTest` (11) — trial preference, base-plan fallback, offerId override, eligibility.
+- `IdempotencyStoreTest` (6) — persistence across instances, forget, clearAll, idempotent marks.
+- `SubscriptionSpecTest` (6) — builder defaults, required fields, equality.
+- `BillingConfigTest` (9) — six-SKU catalog, legacy setters, consumable registration, mixed catalogs.
+- `ChangeModeTest` (6) — every `ReplacementMode` mapping + distinctness.
+- `Iso8601DurationTest` (5) — day / week / month / year parsing + malformed input.
 
 ```bash
 ./gradlew :library:testReleaseUnitTest

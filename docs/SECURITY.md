@@ -1,12 +1,15 @@
 # Security
 
 Play Billing is only as secure as your verification path. The wrapper ships two layers of
-verification. The weak one is on by default; the strong one is recommended.
+verification. Both are opt-in -- by default no verification runs; server-side is the
+recommended layer.
 
-## Layer 1 — Client-side signature check (optional)
+## Layer 1 — Client-side signature check (opt-in)
 
-Every `Purchase` returned by Play is signed with your app's Play Console public key. If you
-pass that key to the builder, the wrapper rejects purchases whose signature doesn't match:
+Off by default. When the builder's `base64LicenseKey(...)` is null or empty the wrapper
+skips signature verification entirely (every purchase is accepted on its Play response
+alone). Pass the key to enable the check; when enabled, the wrapper rejects purchases
+whose signature doesn't match:
 
 ```java
 BillingConfig.builder()

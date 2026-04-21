@@ -1,106 +1,193 @@
 # API Reference
 
-All public surface is in package `com.playbillingwrapper`. The handful of models live in
-`com.playbillingwrapper.model` / `status` / `type` / `listener`.
+All public surface is in package `com.playbillingwrapper`. Models live in
+`com.playbillingwrapper.model`, enums in `com.playbillingwrapper.status` /
+`com.playbillingwrapper.type`, listeners in `com.playbillingwrapper.listener`.
 
 ## `PlayBillingWrapper`
 
-### Constructor
+### Construction
 
 ```java
-PlayBillingWrapper(Context context, BillingConfig config, @Nullable WrapperListener listener)
-PlayBillingWrapper(Context context, BillingConfig config, @Nullable WrapperListener listener,
-                   @Nullable Lifecycle lifecycle)
+PlayBillingWrapper(Context, BillingConfig, @Nullable WrapperListener)
+PlayBillingWrapper(Context, BillingConfig, @Nullable WrapperListener, @Nullable Lifecycle)
 ```
 
-- `context` may be an Activity; the wrapper will always store `getApplicationContext()`.
-- `lifecycle` is usually `ProcessLifecycleOwner.get().getLifecycle()` — the wrapper calls
-  `release()` on `ON_DESTROY`.
+The context is stored as `getApplicationContext()`. Pass
+`ProcessLifecycleOwner.get().getLifecycle()` to have `release()` called automatically on
+process shutdown.
 
-### Connection
+### Lifecycle
 
 | Method | Description |
 |--------|-------------|
-| `void connect()` | Open the connection. Idempotent. |
+| `void connect()` | Open the billing connection. Idempotent. Also runs a full product + purchases query cycle. |
 | `void release()` | Close the connection. Safe to call multiple times. |
-| `void restorePurchases()` | Re-trigger a full product + purchases fetch. Call on app foreground. |
+| `void restorePurchases()` | Force a full refresh. |
+| `boolean restorePurchases(long minIntervalMs)` | Throttled atomic refresh. Returns `true` only if this caller won the CAS race and actually dispatched. |
+| `void setListener(@Nullable WrapperListener)` | Swap the callback surface. |
 
-### Purchases (the three methods)
+### Generic purchase API (works for any registered product)
 
-| Method | What it does |
-|--------|--------------|
-| `void buyLifetime(Activity)` | Launches the Play flow for the configured lifetime product. |
-| `void subscribeMonthly(Activity)` | Launches the Play flow for the monthly sub, base plan offer. |
-| `void subscribeYearlyWithTrial(Activity)` | Launches the yearly flow; picks the trial offer when the user is still trial-eligible, falls back to the base plan offer otherwise. |
+| Method | Behaviour |
+|--------|-----------|
+| `void purchaseProduct(Activity, String productId)` | Launch Play flow for any non-consumable. Must be registered via `addLifetimeProductId`. |
+| `void purchaseConsumable(Activity, String productId)` | Launch Play flow for a consumable. Must be registered via `addConsumableProductId`. Auto-consumed after Play confirms. |
+| `void subscribe(Activity, String productId, String basePlanId)` | Launch subscription flow using the matching `SubscriptionSpec`'s trial + offer preferences. |
+| `void subscribe(Activity, String productId, String basePlanId, boolean preferTrial)` | Same, but override the registered trial preference. |
+| `void subscribe(Activity, SubscriptionSpec)` | Launch with an ad-hoc spec. |
+| `void changeSubscription(Activity, String oldProductId, String newProductId, String newBasePlanId, ChangeMode)` | Upgrade / downgrade / swap. The `oldPurchaseToken` is looked up automatically. |
+| `void openManageSubscription(Activity, String productId)` | Deep-link into Play's manage-subscription page. |
 
-### State queries
+### Sugar purchase API (backward-compatible)
+
+| Method | Behaviour |
+|--------|-----------|
+| `void buyLifetime(Activity)` | Forwards to `purchaseProduct(defaultLifetimeProductId)`. |
+| `void subscribeMonthly(Activity)` | Forwards to `subscribe(defaultMonthlySpec)`. |
+| `void subscribeYearlyWithTrial(Activity)` | Forwards to `subscribe(defaultYearlySpec)`. |
+
+### Ownership + state queries
 
 | Method | Returns |
 |--------|---------|
-| `boolean hasLifetime()` | true if the lifetime product is currently owned. |
-| `SubscriptionState monthlyState()` | lifecycle state for the monthly subscription. |
-| `SubscriptionState yearlyState()` | lifecycle state for the yearly subscription. |
-| `boolean isTrialEligibleForYearly()` | whether the user can still start a free trial. |
-| `boolean isSubscribed()` | true if either subscription currently entitles. |
-| `boolean isPremium()` | `hasLifetime() || isSubscribed()`. |
-| `List<PurchaseInfo> getOwnedPurchases()` | Read-only snapshot of every known owned purchase. |
+| `boolean isOwned(String productId)` | User holds this product in PURCHASED state. |
+| `boolean hasLifetime()` | Alias for `isOwned(defaultLifetimeProductId)`. |
+| `SubscriptionState subscriptionState(String productId)` | First matching purchase wins. |
+| `SubscriptionState subscriptionState(String productId, String basePlanId)` | Explicit lookup. |
+| `SubscriptionState monthlyState()` / `yearlyState()` | Sugar for the default specs. |
+| `boolean isTrialEligible(String productId, String basePlanId)` | Any free-trial offer on the base plan is eligible? |
+| `boolean isTrialEligibleForYearly()` | Sugar for the default yearly spec. |
+| `boolean isSubscribed()` | Any registered subscription currently entitling. |
+| `boolean isPremium()` | Any lifetime product owned OR `isSubscribed()`. |
+| `List<String> getActiveEntitlements()` | Product ids the user currently holds entitlement for. |
+| `List<PurchaseInfo> getOwnedPurchases()` | Immutable snapshot of raw owned purchases. |
 
-### Management
+### Trial + pricing introspection
 
-| Method | Description |
-|--------|-------------|
-| `openManageSubscription(Activity, String productId)` | Deep-link to Play's manage-subscription page. Does NOT cancel; lets the user do it. |
-| `setListener(WrapperListener)` | Replace the listener. |
-| `BillingConnector rawConnector()` | Escape hatch for advanced workflows. |
+| Method | Returns |
+|--------|---------|
+| `String getTrialPeriodIso(String productId, String basePlanId)` | ISO 8601 billing period (`P3D`, `P7D`, `P14D`) of the first trial offer on the base plan. `null` if no trial offer. |
+| `long getTrialEndMillis(PurchaseInfo)` | Wall-clock estimate of `purchaseTime + trialDuration`. `-1` if the purchase has no trial. |
+| `String getFormattedPrice(String productId)` | Play-formatted price for a one-time product. |
+| `String getFormattedPrice(String productId, String basePlanId)` | Formatted price of the first non-trial pricing phase of the best offer on a base plan. |
+| `List<ProductDetails.PricingPhase> getPricingPhases(String productId, String basePlanId)` | Every phase of the best offer (trial auto-preferred, then preferredOfferId, then base plan). |
+
+### Connection state
+
+| Method | Returns |
+|--------|---------|
+| `boolean isReady()` | `BillingClient` connected AND product details fetched. |
+| `boolean isPurchaseReconciliationComplete()` | First INAPP + SUBS `queryPurchasesAsync` round has completed. |
+
+### Accessors
+
+| Method | Returns |
+|--------|---------|
+| `BillingConnector rawConnector()` | Escape hatch for advanced flows. |
+| `BillingConfig getConfig()` | Read the config back. |
+| `IdempotencyStore getIdempotencyStore()` | The dedupe ledger, for manual `forget(token)` after refund / chargeback. |
 
 ## `BillingConfig.Builder`
 
-| Method | Required? | Notes |
-|--------|-----------|-------|
-| `lifetimeProductId(String)` | if you want lifetime | Non-consumable product id. |
-| `monthlySubProductId(String)` | if you want monthly | Subscription product id. |
-| `monthlyBasePlanId(String)` | with monthly | Base plan id from Play Console. |
-| `yearlySubProductId(String)` | if you want yearly | Subscription product id. |
-| `yearlyBasePlanId(String)` | with yearly | Base plan id from Play Console. |
-| `yearlyTrialOfferId(String)` | optional | Explicit offer id to prefer. If null, any free-trial offer is auto-picked. |
+| Method | Required? | Purpose |
+|--------|-----------|---------|
+| `addLifetimeProductId(String)` | At least one of lifetime / consumable / subscription | Register a non-consumable product id. |
+| `addLifetimeProductIds(Iterable)` | Optional | Bulk-add. |
+| `addConsumableProductId(String)` | At least one of the three | Register a consumable (coins / gems / lives). Auto-consumed after delivery. |
+| `addConsumableProductIds(Iterable)` | Optional | Bulk-add. |
+| `addSubscription(SubscriptionSpec)` | At least one of the three | Register one (productId, basePlanId) pair. |
+| `addSubscriptions(Iterable)` | Optional | Bulk-add. |
+| `defaultLifetimeProductId(String)` | Optional | Bind `buyLifetime(activity)`. Also registers the id. |
+| `defaultMonthly(productId, basePlanId)` | Optional | Bind `subscribeMonthly(activity)` (no trial). |
+| `defaultMonthlyWithTrial(productId, basePlanId)` | Optional | Same, trial auto-picked. |
+| `defaultYearly(productId, basePlanId)` | Optional | Bind yearly sugar (no trial). |
+| `defaultYearlyWithTrial(productId, basePlanId)` | Optional | Same, trial auto-picked. |
+| `lifetimeProductId(String)` etc. | Optional | Legacy 3-shape aliases, still supported. |
 | `userId(String)` | **yes** | One-way hashed stable user id (≤64 chars). |
-| `profileId(String)` | optional | For multi-profile apps. |
-| `base64LicenseKey(String)` | optional | Play Console → Monetization setup → Licensing. See `SECURITY.md`. |
-| `enableLogging(boolean)` | optional | Verbose logcat. Default false. |
-| `autoAcknowledge(boolean)` | optional | Default true. Flip to false only if you acknowledge server-side. |
+| `profileId(String)` | Optional | For multi-profile apps. |
+| `base64LicenseKey(String)` | Optional | Play Console → Monetization setup → Licensing. Enables on-device signature verification when non-null. Off by default. |
+| `enableLogging(boolean)` | Optional | Verbose logcat on the `BillingConnector` tag. Default false. |
+| `autoAcknowledge(boolean)` | Optional | Default true. Flip off only if you acknowledge server-side. |
+
+`build()` throws `IllegalArgumentException` when no products are registered.
+
+## `SubscriptionSpec`
+
+```java
+SubscriptionSpec.of(productId, basePlanId);                        // no trial, no offer override
+SubscriptionSpec.withTrial(productId, basePlanId);                 // prefer free-trial offer
+SubscriptionSpec.builder()
+    .productId(productId)
+    .basePlanId(basePlanId)
+    .preferTrial(true)
+    .preferredOfferId("winback_25")
+    .tag("monthly_discount")
+    .build();
+```
+
+| Field | Purpose |
+|-------|---------|
+| `productId` | Play Console subscription id. |
+| `basePlanId` | Play Console base plan id. |
+| `preferTrial` | If true, `subscribe(...)` auto-picks a free-trial offer when the user is eligible. |
+| `preferredOfferId` | Explicit offer id to prefer (overrides trial auto-pick). |
+| `tag` | Free-form classification string. Never sent to Play. |
+
+## `ChangeMode`
+
+Named aliases for `BillingFlowParams.SubscriptionUpdateParams.ReplacementMode`.
+
+| Value | Play constant | Use |
+|-------|---------------|-----|
+| `UPGRADE_PRORATE_NOW` | `CHARGE_PRORATED_PRICE` | Monthly → yearly, charge prorated delta now. |
+| `UPGRADE_CHARGE_FULL` | `CHARGE_FULL_PRICE` | Upgrade, charge full price, extend expiry by unused credit. |
+| `SWAP_WITH_TIME_CREDIT` | `WITH_TIME_PRORATION` | Swap, credit unused time, no new charge until credit consumed. |
+| `SWAP_WITHOUT_PRORATION` | `WITHOUT_PRORATION` | Swap now, new price at next renewal. Preserves trial. |
+| `DOWNGRADE_DEFERRED` | `DEFERRED` | Yearly → monthly at next renewal. |
 
 ## `WrapperListener`
 
-All methods have `default` implementations — override only what you need.
+All methods have `default` no-op implementations — override what you need.
 
 ```java
-void onReady();
+void onReady();                                              // reconciliation complete
 void onLifetimePurchased(PurchaseInfo);
+void onConsumablePurchased(String productId, int quantity, PurchaseInfo);
 void onSubscriptionActivated(String productId, SubscriptionState state, PurchaseInfo);
+void onSubscriptionCancelled(String productId, PurchaseInfo);  // true→false transition only
 void onPending(PurchaseInfo);
 void onUserCancelled();
 void onError(BillingResponse);
 ```
 
-Each purchase callback fires **at most once per `purchaseToken`**, persistently across app
-restarts. If you need a callback every time the user reaches the paywall, query the state
-methods directly (they read a fresh snapshot).
+### `onSubscriptionCancelled` guarantees
+
+- Fires at most **once per auto-renew true → false transition**, persisted across app
+  restarts via `AutoRenewStateStore`.
+- Does NOT fire on first-load observation of an already-cancelled purchase.
+- Does NOT fire for prepaid plans (non-renewing by definition).
+- Fires again if the user resubscribes and then cancels — resubscribes produce a fresh
+  `purchaseToken`.
+
+### `onConsumablePurchased` guarantees
+
+- Fires only after Play confirms the consume.
+- `quantity` is the Play-reported per-transaction count. Always multiply grants by it.
 
 ## `SubscriptionState`
 
-| Value | Entitled? |
+| Value | Entitles? |
 |-------|-----------|
 | `ACTIVE` | ✓ |
-| `IN_TRIAL` | ✓ |
 | `CANCELED_ACTIVE` | ✓ |
 | `PENDING` | ✗ |
 | `EXPIRED` | ✗ |
-
-All values are derived from the `Purchase` object Play returns. No RTDN, no backend.
+| `IN_TRIAL` | — deprecated, never returned |
 
 ## `OfferSelector`
 
-Static helpers. Usually invoked internally, but exposed for advanced offer routing.
+Static helpers, usually invoked internally.
 
 ```java
 static String pick(ProductDetails details,
@@ -112,25 +199,19 @@ static boolean isTrialEligible(ProductDetails details, String basePlanId);
 
 ## `IdempotencyStore`
 
-Rarely needed directly. The wrapper uses it to dedupe purchase callbacks across app restarts.
+`SharedPreferences`-backed dedupe ledger keyed on `purchaseToken`. Exposed via
+`PlayBillingWrapper.getIdempotencyStore()`.
 
 ```java
-new IdempotencyStore(context);
-store.markHandled(purchaseToken);
+store.markHandled(purchaseToken);     // uses commit() for crash durability
 store.isHandled(purchaseToken);
-store.forget(purchaseToken);          // on refund / void
+store.forget(purchaseToken);          // call on refund / chargeback
 store.clearAll();                     // tests only
 ```
 
-## `BillingConnector`
-
-The underlying client. Exposed via `rawConnector()` for advanced cases (custom product
-catalogs, consumables, multiple subscriptions beyond the three shapes). See the Javadoc on
-the class for specifics.
-
 ## `BillingResponse`
 
-Thin wrapper over `BillingResult`:
+Thin wrapper over `BillingResult`.
 
 ```java
 ErrorType getErrorType();
@@ -140,6 +221,11 @@ String getDebugMessage();
 
 ## `ErrorType`
 
-Enumeration covering every Play Billing response code plus library-specific ones:
-`CLIENT_NOT_READY`, `PRODUCT_NOT_EXIST`, `USER_CANCELED`, `DEVELOPER_ERROR`, `NETWORK_ERROR`,
-`ITEM_ALREADY_OWNED`, `PENDING_PURCHASE_RETRY_ERROR`, etc. See the source for the full list.
+Full enumeration with Javadoc on every value — see
+`library/src/main/java/com/playbillingwrapper/type/ErrorType.java`.
+
+## `BillingConnector`
+
+The underlying client, exposed via `rawConnector()`. Use it for flows the facade does not
+cover (installment plans, prepaid plans, one-time offers, custom offer routing). Most
+callers should not need it.

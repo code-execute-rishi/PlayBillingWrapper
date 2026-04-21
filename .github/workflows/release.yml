@@ -84,7 +84,8 @@ jobs:
           MANUAL="${{ github.event.inputs.bump }}"
           if [[ -n "$MANUAL" ]]; then
             BUMP="$MANUAL"
-          elif echo "$COMMITS" | grep -qE '^[A-Za-z]+!:|BREAKING CHANGE'; then
+          elif echo "$COMMITS" | grep -qE '^[A-Za-z]+(\([^)]+\))?!:|BREAKING CHANGE'; then
+            # Matches both unscoped (feat!: , fix!:) and scoped (feat(api)!: , fix(core)!:) breaking subjects.
             BUMP=major
           elif echo "$COMMITS" | grep -qE '^(feat|feature)(\([^)]+\))?:'; then
             BUMP=minor

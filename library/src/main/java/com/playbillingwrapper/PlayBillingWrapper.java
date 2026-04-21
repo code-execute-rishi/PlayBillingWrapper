@@ -73,7 +73,7 @@ import java.util.Set;
  *
  * // Cancellation hook:
  * @Override public void onSubscriptionCancelled(String productId, PurchaseInfo purchase) {
- *     reEngageScheduler.schedule(productId, billing.getSubscriptionExpiryMillis(purchase));
+ *     reEngageScheduler.schedule(productId, billing.getTrialEndMillis(purchase));
  * }
  * </pre>
  */
@@ -82,10 +82,10 @@ public final class PlayBillingWrapper implements BillingEventListener {
     private final BillingConnector connector;
     private final BillingConfig config;
     private final IdempotencyStore idemStore;
-    private final IdempotencyStore cancelStore; // dedupe for onSubscriptionCancelled
+    private final AutoRenewStateStore autoRenewStore;
     private WrapperListener listener;
 
-    private volatile long lastRestoreAt = 0L;
+    private final java.util.concurrent.atomic.AtomicLong lastRestoreAt = new java.util.concurrent.atomic.AtomicLong(0L);
 
     public PlayBillingWrapper(@NonNull Context context,
                               @NonNull BillingConfig config,
@@ -101,7 +101,7 @@ public final class PlayBillingWrapper implements BillingEventListener {
         this.config = config;
         this.listener = listener;
         this.idemStore = new IdempotencyStore(app);
-        this.cancelStore = new IdempotencyStore(app, "pbw_cancel_idempotency");
+        this.autoRenewStore = new AutoRenewStateStore(app);
 
         this.connector = new BillingConnector(app, config.base64LicenseKey, lifecycle);
 
@@ -135,7 +135,7 @@ public final class PlayBillingWrapper implements BillingEventListener {
 
     public void connect() {
         connector.connect();
-        lastRestoreAt = System.currentTimeMillis();
+        lastRestoreAt.set(System.currentTimeMillis());
     }
 
     public void release() {
@@ -145,21 +145,26 @@ public final class PlayBillingWrapper implements BillingEventListener {
     /** Force a full product + purchases refresh. */
     public void restorePurchases() {
         connector.connect();
-        lastRestoreAt = System.currentTimeMillis();
+        lastRestoreAt.set(System.currentTimeMillis());
     }
 
     /**
      * Throttled refresh. Useful from {@code Activity.onResume()} to catch web-redeemed
      * promo codes, cross-device sync, etc. without hitting Play on every navigation.
+     * <p>
+     * Atomic: concurrent callers race on a compare-and-set of the last-refresh timestamp,
+     * so only one caller dispatches per interval even under heavy navigation.
      *
      * @param minIntervalMs minimum millis between refreshes. Typical values: 30_000L for
      *                      onResume, 300_000L for a periodic background check.
-     * @return {@code true} if a refresh was actually dispatched.
+     * @return {@code true} if this caller won the race and dispatched a refresh.
      */
     public boolean restorePurchases(long minIntervalMs) {
         long now = System.currentTimeMillis();
-        if (now - lastRestoreAt < minIntervalMs) return false;
-        restorePurchases();
+        long previous = lastRestoreAt.get();
+        if (now - previous < minIntervalMs) return false;
+        if (!lastRestoreAt.compareAndSet(previous, now)) return false;
+        connector.connect();
         return true;
     }
 
@@ -601,6 +606,14 @@ public final class PlayBillingWrapper implements BillingEventListener {
     @NonNull
     public BillingConfig getConfig() { return config; }
 
+    /**
+     * Exposes the dedupe ledger so callers can manually {@code forget(purchaseToken)}
+     * after a refund / chargeback (so a future re-purchase with a recycled token is
+     * delivered fresh) or reset the ledger in tests.
+     */
+    @NonNull
+    public IdempotencyStore getIdempotencyStore() { return idemStore; }
+
     // ---------------------------------------------------------------------
     //  BillingEventListener bridge
     // ---------------------------------------------------------------------
@@ -690,12 +703,15 @@ public final class PlayBillingWrapper implements BillingEventListener {
             }
             if (!p.isPurchased()) continue;
 
-            // Subscription-cancellation edge: fires once per token when auto-renew flips off.
-            if (p.getSkuProductType() == SkuProductType.SUBSCRIPTION
-                    && !p.getPurchase().isAutoRenewing()) {
-                String key = "cancel:" + p.getPurchaseToken();
-                if (!cancelStore.isHandled(key)) {
-                    cancelStore.markHandled(key);
+            // Subscription-cancellation edge: fire ONLY on a true-to-false transition of
+            // isAutoRenewing(). Skips first-load observations of already-cancelled
+            // subscriptions and skips prepaid plans (non-renewing by definition). The store
+            // persists the last-seen auto-renew bit per purchaseToken across app restarts.
+            if (p.getSkuProductType() == SkuProductType.SUBSCRIPTION) {
+                boolean isAutoRenewing = p.getPurchase().isAutoRenewing();
+                boolean transitioned = autoRenewStore.recordAndDetectCancellation(
+                        p.getPurchaseToken(), isAutoRenewing);
+                if (transitioned) {
                     l.onSubscriptionCancelled(p.getProduct(), p);
                 }
             }

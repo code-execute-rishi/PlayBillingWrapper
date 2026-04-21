@@ -50,6 +50,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -79,7 +80,10 @@ public class BillingConnector implements DefaultLifecycleObserver {
     private static final long RECONNECT_TIMER_MAX_TIME_MILLISECONDS = 1000L * 60L * 15L;
     private final AtomicLong reconnectMilliseconds = new AtomicLong(RECONNECT_TIMER_START_MILLISECONDS);
 
-    private static final int DEFAULT_MAX_PENDING_RETRIES = 60;
+    // High enough that, with 60-second max delay between attempts, we keep retrying for
+    // ~100 days before giving up -- effectively unbounded for real cash / bank-transfer
+    // PENDING purchases. Callers that want a hard cap set setMaxPendingRetries().
+    private static final int DEFAULT_MAX_PENDING_RETRIES = Integer.MAX_VALUE;
     private static final long INITIAL_RETRY_DELAY_MS = 1000L;
     private static final long MAX_RETRY_DELAY_MS = 60_000L;
     // Real PENDING (cash, bank transfer) may take hours/days. Default is effectively unbounded.
@@ -428,11 +432,35 @@ public class BillingConnector implements DefaultLifecycleObserver {
             throw new IllegalArgumentException("At least one list of consumables, non-consumables or subscriptions is needed");
         }
 
-        // Check for duplicates product IDs
-        int allIdsSize = allProductList.size();
-        int allIdsSizeDistinct = new HashSet<>(allProductList).size();
-        if (allIdsSize != allIdsSizeDistinct) {
-            throw new IllegalArgumentException("The product ID must appear only once in a list. Also, it must not be in different lists");
+        // Check for duplicate product IDs using the strings we registered, NOT the
+        // Play QueryProductDetailsParams.Product object (its equals() is not documented
+        // to compare by productId).
+        Set<String> allIdsSeen = new HashSet<>();
+        if (consumableIds != null) {
+            for (String id : consumableIds) {
+                if (!allIdsSeen.add(id)) {
+                    throw new IllegalArgumentException("Duplicate product id '" + id + "' across the consumable / non-consumable / subscription lists");
+                }
+            }
+        }
+        if (nonConsumableIds != null) {
+            for (String id : nonConsumableIds) {
+                if (!allIdsSeen.add(id)) {
+                    throw new IllegalArgumentException("Duplicate product id '" + id + "' across the consumable / non-consumable / subscription lists");
+                }
+            }
+        }
+        if (subscriptionIds != null) {
+            // NB: a single subscription productId may legitimately have multiple base
+            // plans, but productIds are still unique across the INAPP / SUBS divide.
+            Set<String> subDedupe = new HashSet<>();
+            for (String id : subscriptionIds) {
+                if (allIdsSeen.contains(id) && !subDedupe.contains(id)) {
+                    throw new IllegalArgumentException("Duplicate product id '" + id + "' across INAPP and SUBS lists");
+                }
+                allIdsSeen.add(id);
+                subDedupe.add(id);
+            }
         }
 
         Log("Billing service: connecting...");
@@ -496,11 +524,19 @@ public class BillingConnector implements DefaultLifecycleObserver {
         if (!productSubsList.isEmpty()) queryCount++;
         productDetailsQueriesPending.set(queryCount);
 
+        // Build the parallel id lists here so we don't have to reach for the obfuscated
+        // BillingClient.Product.zza() accessor later.
+        List<String> inAppIds = new ArrayList<>();
+        if (consumableIds != null) inAppIds.addAll(consumableIds);
+        if (nonConsumableIds != null) inAppIds.addAll(nonConsumableIds);
+
+        List<String> subsIds = subscriptionIds == null ? new ArrayList<>() : new ArrayList<>(subscriptionIds);
+
         if (!productInAppList.isEmpty()) {
-            queryProductDetails(INAPP, productInAppList);
+            queryProductDetails(INAPP, productInAppList, inAppIds);
         }
         if (!productSubsList.isEmpty()) {
-            queryProductDetails(SUBS, productSubsList);
+            queryProductDetails(SUBS, productSubsList, subsIds);
         }
     }
 
@@ -522,7 +558,9 @@ public class BillingConnector implements DefaultLifecycleObserver {
     /**
      * Fires a query in Play Console to show products available to purchase
      */
-    private void queryProductDetails(String productType, List<QueryProductDetailsParams.Product> productList) {
+    private void queryProductDetails(String productType,
+                                     List<QueryProductDetailsParams.Product> productList,
+                                     List<String> requestedProductIds) {
         QueryProductDetailsParams productDetailsParams = QueryProductDetailsParams.newBuilder().setProductList(productList).build();
 
         billingClient.queryProductDetailsAsync(productDetailsParams, (billingResult, productDetailsResult) -> {
@@ -534,8 +572,9 @@ public class BillingConnector implements DefaultLifecycleObserver {
                     foundProductIds.add(details.getProductId());
                 }
 
-                for (QueryProductDetailsParams.Product requestedProduct : productList) {
-                    String productId = requestedProduct.zza(); // .zza() gets the product ID string
+                // Iterate our own id list so we never have to call the obfuscated
+                // QueryProductDetailsParams.Product.zza() accessor.
+                for (String productId : requestedProductIds) {
                     if (!foundProductIds.contains(productId)) {
                         Log("Error: Product ID '" + productId + "' not found. " +
                                 "Make sure it is configured correctly in the Play Console");

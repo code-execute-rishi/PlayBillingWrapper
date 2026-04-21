@@ -104,7 +104,7 @@ purchase→acknowledge→idempotent-redelivery loop.
 - [ ] Reinstall the app → `hasLifetime()` still true (restore works).
 - [ ] Buy monthly → `monthlyState() == ACTIVE` after Play dialog closes.
 - [ ] Cancel monthly from Play → `monthlyState() == CANCELED_ACTIVE` until expiry.
-- [ ] Buy yearly as a fresh tester (trial-eligible) → `onSubscriptionActivated(..., IN_TRIAL, ...)`.
+- [ ] Buy yearly as a fresh tester (trial-eligible) → `onSubscriptionActivated(..., ACTIVE, ...)` fires and `isTrialEligibleForYearly()` returns `false` afterwards.
 - [ ] Buy yearly as a returning tester (ineligible) → `onSubscriptionActivated(..., ACTIVE, ...)`.
 - [ ] Pending payment method (cash/bank transfer test id) → `onPending(...)` fires; does not
       grant entitlement until state transitions.
