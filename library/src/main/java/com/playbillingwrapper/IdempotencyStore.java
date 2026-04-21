@@ -19,14 +19,23 @@ import java.util.Set;
  */
 public final class IdempotencyStore {
 
-    private static final String PREFS_NAME = "pbw_idempotency";
+    private static final String DEFAULT_PREFS_NAME = "pbw_idempotency";
     private static final String KEY_HANDLED_TOKENS = "handled_tokens";
 
     private final SharedPreferences prefs;
 
     public IdempotencyStore(@NonNull Context context) {
+        this(context, DEFAULT_PREFS_NAME);
+    }
+
+    /**
+     * Create an isolated dedupe store. Useful when a caller needs separate ledgers for
+     * distinct event types (e.g. purchase delivery vs. subscription-cancellation), so that
+     * forgetting one type does not affect the other.
+     */
+    public IdempotencyStore(@NonNull Context context, @NonNull String prefsName) {
         this.prefs = context.getApplicationContext()
-                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                .getSharedPreferences(prefsName, Context.MODE_PRIVATE);
     }
 
     /**

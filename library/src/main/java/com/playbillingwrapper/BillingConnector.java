@@ -859,7 +859,7 @@ public class BillingConnector implements DefaultLifecycleObserver {
      * For subscriptions prefer {@link #purchaseSubscription(Activity, String, String)}.
      */
     public final void purchase(Activity activity, String productId) {
-        purchaseInternal(activity, productId, null, notAnOffer);
+        purchaseInternal(activity, productId, null, notAnOffer, null, 0);
     }
 
     /**
@@ -878,10 +878,37 @@ public class BillingConnector implements DefaultLifecycleObserver {
                                     "Use OfferSelector to pick a token.", defaultResponseCode)));
             return;
         }
-        purchaseInternal(activity, productId, offerToken, -1);
+        purchaseInternal(activity, productId, offerToken, -1, null, 0);
     }
 
-    private void purchaseInternal(Activity activity, String productId, String offerToken, int legacyOfferIndex) {
+    /**
+     * Upgrade / downgrade / swap an existing subscription. Wraps
+     * {@link BillingFlowParams.SubscriptionUpdateParams} so callers don't have to reach
+     * for the raw {@code ReplacementMode} constants.
+     *
+     * @param activity             foreground Activity
+     * @param newProductId         new subscription product id
+     * @param newOfferToken        offer token picked via {@link OfferSelector}
+     * @param oldPurchaseToken     {@code purchaseToken} from the subscription being replaced
+     * @param playReplacementMode  value from {@code BillingFlowParams.SubscriptionUpdateParams.ReplacementMode.*}
+     */
+    public final void changeSubscription(@NonNull Activity activity,
+                                         @NonNull String newProductId,
+                                         @NonNull String newOfferToken,
+                                         @NonNull String oldPurchaseToken,
+                                         int playReplacementMode) {
+        if (newOfferToken.isEmpty() || oldPurchaseToken.isEmpty()) {
+            findUiHandler().post(() -> safe().onBillingError(BillingConnector.this,
+                    new BillingResponse(ErrorType.DEVELOPER_ERROR,
+                            "changeSubscription requires non-empty newOfferToken + oldPurchaseToken.",
+                            defaultResponseCode)));
+            return;
+        }
+        purchaseInternal(activity, newProductId, newOfferToken, -1, oldPurchaseToken, playReplacementMode);
+    }
+
+    private void purchaseInternal(Activity activity, String productId, String offerToken, int legacyOfferIndex,
+                                  @Nullable String oldPurchaseTokenForChange, int playReplacementMode) {
         if (checkProductBeforeInteraction(productId)) {
             ProductInfo foundProductInfo = null;
             for (ProductInfo productInfo : fetchedProductInfoList) {
@@ -931,6 +958,15 @@ public class BillingConnector implements DefaultLifecycleObserver {
 
                 if (obfuscatedAccountId != null) flowBuilder.setObfuscatedAccountId(obfuscatedAccountId);
                 if (obfuscatedProfileId != null) flowBuilder.setObfuscatedProfileId(obfuscatedProfileId);
+
+                if (oldPurchaseTokenForChange != null) {
+                    BillingFlowParams.SubscriptionUpdateParams updateParams =
+                            BillingFlowParams.SubscriptionUpdateParams.newBuilder()
+                                    .setOldPurchaseToken(oldPurchaseTokenForChange)
+                                    .setSubscriptionReplacementMode(playReplacementMode)
+                                    .build();
+                    flowBuilder.setSubscriptionUpdateParams(updateParams);
+                }
 
                 BillingResult launchResult = billingClient.launchBillingFlow(activity, flowBuilder.build());
                 if (launchResult.getResponseCode() != OK) {
