@@ -244,7 +244,7 @@ dependencyResolutionManagement {
 
 ```gradle
 dependencies {
-    implementation 'com.github.code-execute-rishi:PlayBillingWrapper:v0.2.1'
+    implementation 'com.github.code-execute-rishi:PlayBillingWrapper:v0.2.2'
 }
 ```
 
@@ -1054,7 +1054,7 @@ returned. Confirm the wrapper is application-scoped and `setListener(null)` is c
 `onDestroy`.
 
 **JitPack returns 404 for `X.Y.Z` but serves `vX.Y.Z`.** Use the v-prefixed coordinate:
-`implementation 'com.github.code-execute-rishi:PlayBillingWrapper:v0.2.1'`.
+`implementation 'com.github.code-execute-rishi:PlayBillingWrapper:v0.2.2'`.
 
 **PENDING purchase never resolves.** That's the user taking a long time to pay cash / clear
 the bank transfer. The wrapper retries indefinitely; the token is preserved on every
