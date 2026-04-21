@@ -1106,6 +1106,7 @@ correctness references during the rewrite. See [`NOTICE`](NOTICE) for attributio
 
 ## Additional documentation
 
+- [`docs/GUIDE.md`](docs/GUIDE.md) — end-to-end guide for 4 real-world paywall shapes: yearly with 3-day trial, monthly, lifetime one-time, and monthly with intro pricing (cheap first period then normal price). Play Console setup + Android code + per-scenario test matrix.
 - [`docs/INTEGRATION.md`](docs/INTEGRATION.md) — step-by-step Play Console setup and first-run walkthrough.
 - [`docs/API.md`](docs/API.md) — condensed API reference.
 - [`docs/SECURITY.md`](docs/SECURITY.md) — server-side verification guide with reference code.
