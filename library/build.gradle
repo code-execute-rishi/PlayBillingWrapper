@@ -50,7 +50,7 @@ afterEvaluate {
                 from components.release
                 groupId = 'com.github.code-execute-rishi'
                 artifactId = 'PlayBillingWrapper'
-                version = '0.3.0'
+                version = '0.3.1'
             }
         }
     }
