@@ -62,6 +62,18 @@ public interface BillingAnalytics {
                                 @Nullable String periodIso,
                                 @NonNull PurchaseInfo purchase) { }
 
+    /**
+     * A subscription was activated with an intro-pricing offer (e.g. "$1 first week,
+     * then $19/year"). Fires once per {@code purchaseToken}. {@code periodIso} is the
+     * intro phase billing period as ISO 8601 (e.g. {@code "P1W"}, {@code "P1M"}).
+     * {@code billingCycleCount} is how many times the intro phase repeats before the
+     * recurring phase kicks in (often 1 but can be N).
+     */
+    default void onIntroStarted(@NonNull String productId,
+                                @Nullable String periodIso,
+                                int billingCycleCount,
+                                @NonNull PurchaseInfo purchase) { }
+
     /** Auto-renewing flipped from true to false (fires once per transition). */
     default void onSubscriptionCancelled(@NonNull String productId,
                                          @NonNull PurchaseInfo purchase) { }

@@ -215,6 +215,7 @@ A non-exhaustive list of real-app patterns the library now handles:
 | Downgrade yearly → monthly at next renewal | `changeSubscription(..., ChangeMode.DOWNGRADE_DEFERRED)`. |
 | Swap preserving free trial | `ChangeMode.SWAP_WITHOUT_PRORATION`. |
 | Explicit winback / promo offer id | `SubscriptionSpec.builder().preferredOfferId("winback_25").build()`. |
+| Intro pricing offer ("$1 first week, then $19/year") | `addSubscription(SubscriptionSpec.withIntro(id, basePlanId, "intro_1w_1usd"))`; query with `isIntroEligible`, `getIntroPhase`, `getIntroPeriodIso`, `getIntroEndMillis`, `getIntroPrice`, `getRecurringPrice`; analytics fires `onIntroStarted`. |
 | User paused subscription from Play | `subscriptionState(id) == PAUSED`, `purchase.isPaused() == true`. |
 | Paywall price labels | `getFormattedPrice(id)` for one-time, `getFormattedPrice(id, basePlanId)` for subs. |
 | Intro pricing UI ("Free for 3 days, then $3.99/mo") | `getOfferPhases(id, basePlanId)` returns typed phases with `isFree / isIntro / isRecurring`. |
@@ -1004,6 +1005,8 @@ Optionally pass `ProcessLifecycleOwner.get().getLifecycle()` so `release()` is c
 | `SubscriptionState monthlyState()` / `yearlyState()` | Default-spec sugar. |
 | `boolean isTrialEligible(String productId, String basePlanId)` | Any free-trial offer on the base plan? |
 | `boolean isTrialEligibleForYearly()` | Sugar for default yearly spec. |
+| `boolean isIntroEligible(String productId, String basePlanId)` | Any intro-pricing offer (non-zero price + `FINITE_RECURRING`) on the base plan? |
+| `boolean isIntroEligible(String productId)` | Any registered base plan has an eligible intro offer. |
 | `boolean isSubscribed()` | Any registered subscription is entitling. |
 | `boolean isPremium()` | Any lifetime product owned OR `isSubscribed()`. |
 | `List<String> getActiveEntitlements()` | Product ids the user currently holds entitlement for. |
@@ -1017,12 +1020,23 @@ Optionally pass `ProcessLifecycleOwner.get().getLifecycle()` so `release()` is c
 | `long getTrialEndMillis(PurchaseInfo, String basePlanId)` | Deterministic wall-clock estimate of `purchaseTime + trialDuration`. |
 | `long getTrialEndMillis(PurchaseInfo)` | Convenience: scans every registered spec for the productId; ambiguous for multi-plan products. |
 
+#### Intro pricing introspection
+
+| Method | Returns |
+|--------|---------|
+| `PricingPhases getIntroPhase(String productId, String basePlanId)` | Typed intro pricing phase of the best offer on the base plan, or `null` if no intro offer is eligible. |
+| `String getIntroPeriodIso(String productId, String basePlanId)` | ISO 8601 billing period of the intro phase, e.g. `"P1W"`, `"P1M"`. |
+| `long getIntroEndMillis(PurchaseInfo, String basePlanId)` | Estimated wall-clock end of the intro phase, computed as `purchaseTime + introPeriod * billingCycleCount`. |
+| `long getIntroEndMillis(PurchaseInfo)` | Convenience scan across registered specs for this product id. |
+
 #### Paywall price helpers
 
 | Method | Returns |
 |--------|---------|
 | `String getFormattedPrice(String productId)` | Play-formatted price string for a one-time product (lifetime or consumable). |
-| `String getFormattedPrice(String productId, String basePlanId)` | Formatted price of the first non-trial pricing phase of the best offer on a base plan. |
+| `String getFormattedPrice(String productId, String basePlanId)` | Formatted price of the first non-trial pricing phase — intro price if intro offer selected, base price otherwise. |
+| `String getIntroPrice(String productId, String basePlanId)` | Formatted price of the intro phase (e.g. `"$1.00"`), or `null` if no intro offer. |
+| `String getRecurringPrice(String productId, String basePlanId)` | Formatted price of the recurring (INFINITE_RECURRING) phase — the renewal price after any trial or intro ends. |
 | `List<PricingPhases> getOfferPhases(String productId, String basePlanId)` | **Typed** phase list (library wrapper, not Play SDK) with `isFree / isIntro / isRecurring / getPeriodIso / getPeriodDurationMillis` helpers. |
 | `List<ProductDetails.PricingPhase> getPricingPhases(String productId, String basePlanId)` | **Deprecated** — returns the raw Play SDK type; prefer `getOfferPhases`. |
 
@@ -1048,6 +1062,7 @@ Declares one (`productId`, `basePlanId`) pair with optional trial preference and
 ```java
 SubscriptionSpec.of("com.app.premium", "monthly");
 SubscriptionSpec.withTrial("com.app.premium", "monthly");          // 3-day trial monthly
+SubscriptionSpec.withIntro("com.app.premium", "yearly", "intro_1w_1usd");  // $1 first week, then base
 SubscriptionSpec.builder()
     .productId("com.app.premium")
     .basePlanId("monthly")
@@ -1110,6 +1125,7 @@ void onBeginCheckout(String productId, @Nullable String basePlanId, @Nullable St
 void onPurchaseCompleted(String productId, PurchaseInfo);
 void onSubscriptionActivated(String productId, SubscriptionState state, PurchaseInfo);
 void onTrialStarted(String productId, @Nullable String periodIso, PurchaseInfo);
+void onIntroStarted(String productId, @Nullable String periodIso, int billingCycleCount, PurchaseInfo);
 void onSubscriptionCancelled(String productId, PurchaseInfo);
 void onConsumablePurchased(String productId, int quantity, PurchaseInfo);
 void onUserCancelled(String productId);

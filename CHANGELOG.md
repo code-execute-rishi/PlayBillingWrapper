@@ -1,6 +1,31 @@
 # Changelog
 
-## Unreleased (post-review hardening)
+## Unreleased
+
+### Added -- first-class intro pricing
+
+Making "cheap first period then normal price" offers (e.g. `$1 first week, then $19/year`)
+a one-liner, symmetric with the existing free-trial API.
+
+- **`SubscriptionSpec.withIntro(productId, basePlanId, introOfferId)`** -- sugar that sets
+  `preferredOfferId` to the intro offer.
+- **`PlayBillingWrapper.isIntroEligible(productId [, basePlanId])`** -- true when Play still
+  exposes an offer with a non-zero `FINITE_RECURRING` phase on the base plan. Mirrors
+  `isTrialEligible`.
+- **`getIntroPhase(id, basePlan)` / `getIntroPeriodIso(id, basePlan)`** -- typed accessor +
+  ISO-8601 period for the intro phase.
+- **`getIntroEndMillis(purchase [, basePlan])`** -- deterministic wall-clock estimate of
+  `purchaseTime + introPeriod * billingCycleCount`. Mirrors `getTrialEndMillis`.
+- **`getIntroPrice(id, basePlan)` / `getRecurringPrice(id, basePlan)`** -- formatted price
+  strings for paywall CTAs, disambiguating the existing `getFormattedPrice` which returns
+  the first non-trial phase (i.e. the intro price when an intro offer is selected).
+- **`BillingAnalytics.onIntroStarted(productId, periodIso, billingCycleCount, purchase)`**
+  -- default no-op hook. Fires once per `purchaseToken` on first-time delivery, mutually
+  exclusive with `onTrialStarted`.
+- **`OfferSelector.isIntroEligible(details, basePlanId)`** -- static helper used by the
+  wrapper and exposed for advanced offer routing.
+
+## v0.3.0 (post-review hardening)
 
 Fixes surfaced by a manual correctness review of 0.1.1.
 

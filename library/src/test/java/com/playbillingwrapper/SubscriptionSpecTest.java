@@ -30,6 +30,20 @@ public class SubscriptionSpecTest {
     }
 
     @Test
+    public void withIntro_sets_preferredOfferId() {
+        SubscriptionSpec s = SubscriptionSpec.withIntro("prod", "yearly", "intro_1w_1usd");
+        assertEquals("prod", s.productId);
+        assertEquals("yearly", s.basePlanId);
+        assertFalse(s.preferTrial);
+        assertEquals("intro_1w_1usd", s.preferredOfferId);
+    }
+
+    @Test(expected = NullPointerException.class)
+    public void withIntro_requires_offerId() {
+        SubscriptionSpec.withIntro("prod", "yearly", null);
+    }
+
+    @Test
     public void builder_populates_every_field() {
         SubscriptionSpec s = SubscriptionSpec.builder()
                 .productId("p")
