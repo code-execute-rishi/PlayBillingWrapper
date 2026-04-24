@@ -83,9 +83,39 @@ public final class OfferSelector {
         return false;
     }
 
+    /**
+     * True if the given product has at least one eligible offer on {@code basePlanId}
+     * that contains an intro pricing phase (non-zero price with
+     * {@code RecurrenceMode.FINITE_RECURRING}, e.g. "$1 for the first week").
+     * <p>
+     * Like {@link #isTrialEligible}, Google Play silently omits ineligible offers from
+     * {@code getSubscriptionOfferDetails()}, so this doubles as the eligibility signal for
+     * "has this account ever redeemed this intro offer".
+     */
+    public static boolean isIntroEligible(@NonNull ProductDetails details, @NonNull String basePlanId) {
+        List<ProductDetails.SubscriptionOfferDetails> all = details.getSubscriptionOfferDetails();
+        if (all == null) return false;
+        for (ProductDetails.SubscriptionOfferDetails o : all) {
+            if (!basePlanId.equals(o.getBasePlanId())) continue;
+            if (o.getOfferId() == null) continue;
+            if (hasIntroPhase(o)) return true;
+        }
+        return false;
+    }
+
     private static boolean hasFreeTrialPhase(@NonNull ProductDetails.SubscriptionOfferDetails offer) {
         for (ProductDetails.PricingPhase p : offer.getPricingPhases().getPricingPhaseList()) {
             if (p.getPriceAmountMicros() == 0L) return true;
+        }
+        return false;
+    }
+
+    static boolean hasIntroPhase(@NonNull ProductDetails.SubscriptionOfferDetails offer) {
+        for (ProductDetails.PricingPhase p : offer.getPricingPhases().getPricingPhaseList()) {
+            if (p.getPriceAmountMicros() > 0L
+                    && p.getRecurrenceMode() == ProductDetails.RecurrenceMode.FINITE_RECURRING) {
+                return true;
+            }
         }
         return false;
     }

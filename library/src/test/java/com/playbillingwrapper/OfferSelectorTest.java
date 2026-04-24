@@ -117,6 +117,60 @@ public class OfferSelectorTest {
         assertFalse(OfferSelector.isTrialEligible(details, BASE_PLAN));
     }
 
+    @Test
+    public void isIntroEligible_true_when_offer_has_finite_recurring_paid_phase() {
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "intro_1w_1usd", "tok-intro", introPhase(), paidPhase())
+        );
+        assertTrue(OfferSelector.isIntroEligible(details, BASE_PLAN));
+    }
+
+    @Test
+    public void isIntroEligible_false_when_only_base_plan_offer_exists() {
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase())
+        );
+        assertFalse(OfferSelector.isIntroEligible(details, BASE_PLAN));
+    }
+
+    @Test
+    public void isIntroEligible_false_when_only_free_trial_offer() {
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "freetrial", "tok-trial", freePhase(), paidPhase())
+        );
+        assertFalse(OfferSelector.isIntroEligible(details, BASE_PLAN));
+    }
+
+    @Test
+    public void isIntroEligible_false_for_different_base_plan() {
+        ProductDetails details = withOffers(
+                offer("monthly", "intro_1w_1usd", "tok-intro", introPhase(), paidPhase())
+        );
+        assertFalse(OfferSelector.isIntroEligible(details, BASE_PLAN));
+    }
+
+    @Test
+    public void preferredOfferId_picks_intro_offer() {
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "intro_1w_1usd", "tok-intro", introPhase(), paidPhase())
+        );
+        assertEquals("tok-intro",
+                OfferSelector.pick(details, BASE_PLAN, "intro_1w_1usd", false));
+    }
+
+    @Test
+    public void falls_back_to_base_plan_when_intro_offer_omitted_by_play() {
+        // Play hides the intro offer from repeat redeemers -- wrapper must still resolve a token.
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase())
+        );
+        assertEquals("tok-base",
+                OfferSelector.pick(details, BASE_PLAN, "intro_1w_1usd", false));
+    }
+
     // ---- helpers ----
 
     private static ProductDetails withOffers(ProductDetails.SubscriptionOfferDetails... offers) {
@@ -152,6 +206,17 @@ public class OfferSelectorTest {
         when(p.getPriceAmountMicros()).thenReturn(12_99_000_000L);
         when(p.getFormattedPrice()).thenReturn("₹1299.00");
         when(p.getBillingPeriod()).thenReturn("P1Y");
+        when(p.getRecurrenceMode()).thenReturn(ProductDetails.RecurrenceMode.INFINITE_RECURRING);
+        return p;
+    }
+
+    private static ProductDetails.PricingPhase introPhase() {
+        ProductDetails.PricingPhase p = mock(ProductDetails.PricingPhase.class);
+        when(p.getPriceAmountMicros()).thenReturn(1_000_000L);
+        when(p.getFormattedPrice()).thenReturn("$1.00");
+        when(p.getBillingPeriod()).thenReturn("P1W");
+        when(p.getBillingCycleCount()).thenReturn(1);
+        when(p.getRecurrenceMode()).thenReturn(ProductDetails.RecurrenceMode.FINITE_RECURRING);
         return p;
     }
 }

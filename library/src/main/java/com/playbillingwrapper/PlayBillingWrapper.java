@@ -575,6 +575,116 @@ public final class PlayBillingWrapper implements BillingEventListener {
     }
 
     // ---------------------------------------------------------------------
+    //  Intro-pricing queries (e.g. "$1 first week, then $19/yr")
+    // ---------------------------------------------------------------------
+
+    /**
+     * True if the given subscription base plan has at least one eligible offer with an
+     * intro pricing phase (non-zero price, {@code FINITE_RECURRING}). Play silently omits
+     * ineligible offers, so this is also the correct "has this account redeemed the intro"
+     * eligibility check.
+     */
+    public boolean isIntroEligible(@NonNull String productId, @NonNull String basePlanId) {
+        ProductDetails details = findProductDetails(productId);
+        if (details == null) return false;
+        return OfferSelector.isIntroEligible(details, basePlanId);
+    }
+
+    /**
+     * Convenience: true if ANY registered {@link SubscriptionSpec} for {@code productId}
+     * has an eligible intro-pricing offer.
+     */
+    public boolean isIntroEligible(@NonNull String productId) {
+        for (SubscriptionSpec spec : config.subscriptions) {
+            if (!spec.productId.equals(productId)) continue;
+            if (isIntroEligible(spec.productId, spec.basePlanId)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Returns the first intro pricing phase on {@code (productId, basePlanId)} as the
+     * library's typed wrapper, or {@code null} if no intro offer is eligible. Walks the
+     * offer chosen by the registered {@link SubscriptionSpec} (preferredOfferId > trial >
+     * base plan), so callers that registered their intro offer via
+     * {@link SubscriptionSpec#withIntro} get the exact phase they configured.
+     * <p>
+     * Useful for paywall labels like {@code phase.getFormattedPrice() + " for " +
+     * phase.getBillingCycleCount() + " " + phase.getPeriodIso()}.
+     */
+    @Nullable
+    public com.playbillingwrapper.model.SubscriptionOfferDetails.PricingPhases getIntroPhase(
+            @NonNull String productId, @NonNull String basePlanId) {
+        List<com.playbillingwrapper.model.SubscriptionOfferDetails.PricingPhases> phases =
+                getOfferPhases(productId, basePlanId);
+        if (phases == null) return null;
+        for (com.playbillingwrapper.model.SubscriptionOfferDetails.PricingPhases p : phases) {
+            if (p.isIntro()) return p;
+        }
+        return null;
+    }
+
+    /**
+     * ISO 8601 billing period of the first intro pricing phase, e.g. {@code "P1W"} for
+     * "$1 first week". Returns {@code null} if no intro offer is eligible.
+     */
+    @Nullable
+    public String getIntroPeriodIso(@NonNull String productId, @NonNull String basePlanId) {
+        com.playbillingwrapper.model.SubscriptionOfferDetails.PricingPhases phase =
+                getIntroPhase(productId, basePlanId);
+        return phase == null ? null : phase.getPeriodIso();
+    }
+
+    /**
+     * Estimated wall-clock end of the intro pricing phase for a subscription purchase on
+     * the given {@code basePlanId}, computed as
+     * {@code purchaseTime + (introPeriodMs * billingCycleCount)}. Pass the base plan the
+     * user actually bought. Returns {@code -1} if the purchase is not a subscription, is
+     * PENDING, lacks a ProductInfo, or has no intro offer on the given base plan.
+     * <p>
+     * Client-side estimate; authoritative phase transitions are only available via the
+     * Play Developer API server-side. Months approximated as 30 days, years as 365 days.
+     */
+    public long getIntroEndMillis(@NonNull PurchaseInfo purchase, @NonNull String basePlanId) {
+        if (purchase.getSkuProductType() != SkuProductType.SUBSCRIPTION) return -1;
+        if (!purchase.isPurchased()) return -1;
+        ProductInfo info = purchase.getProductInfo();
+        if (info == null) return -1;
+        ProductDetails details = info.getProductDetails();
+        List<ProductDetails.SubscriptionOfferDetails> offers = details.getSubscriptionOfferDetails();
+        if (offers == null) return -1;
+        for (ProductDetails.SubscriptionOfferDetails offer : offers) {
+            if (!basePlanId.equals(offer.getBasePlanId())) continue;
+            if (offer.getOfferId() == null) continue;
+            for (ProductDetails.PricingPhase phase : offer.getPricingPhases().getPricingPhaseList()) {
+                if (phase.getPriceAmountMicros() > 0L
+                        && phase.getRecurrenceMode() == ProductDetails.RecurrenceMode.FINITE_RECURRING) {
+                    long periodMs = parseIso8601DurationMillis(phase.getBillingPeriod());
+                    if (periodMs <= 0) return -1;
+                    int cycles = Math.max(1, phase.getBillingCycleCount());
+                    return purchase.getPurchaseTime() + periodMs * cycles;
+                }
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Convenience overload that scans every registered {@link SubscriptionSpec} for
+     * {@code purchase.getProduct()} and returns the first intro-end estimate it can
+     * compute. Ambiguous when a product has multiple base plans -- prefer
+     * {@link #getIntroEndMillis(PurchaseInfo, String)} in that case.
+     */
+    public long getIntroEndMillis(@NonNull PurchaseInfo purchase) {
+        for (SubscriptionSpec spec : config.subscriptions) {
+            if (!spec.productId.equals(purchase.getProduct())) continue;
+            long est = getIntroEndMillis(purchase, spec.basePlanId);
+            if (est > 0) return est;
+        }
+        return -1;
+    }
+
+    // ---------------------------------------------------------------------
     //  Price + offer display helpers
     // ---------------------------------------------------------------------
 
@@ -597,6 +707,11 @@ public final class PlayBillingWrapper implements BillingEventListener {
      * {@code (productId, basePlanId)}. Returns {@code null} if no offer is available yet.
      * Use {@link #getPricingPhases(String, String)} if you need to render every phase
      * (intro + recurring) separately.
+     * <p>
+     * Note: for intro-pricing offers the first non-trial phase is the intro price (e.g.
+     * $1), not the recurring price. Prefer {@link #getRecurringPrice(String, String)}
+     * when you want the renewal price and {@link #getIntroPrice(String, String)} when
+     * you want the intro price.
      */
     @Nullable
     public String getFormattedPrice(@NonNull String productId, @NonNull String basePlanId) {
@@ -604,6 +719,34 @@ public final class PlayBillingWrapper implements BillingEventListener {
         if (phases == null || phases.isEmpty()) return null;
         for (ProductDetails.PricingPhase p : phases) {
             if (p.getPriceAmountMicros() > 0L) return p.getFormattedPrice();
+        }
+        return phases.get(phases.size() - 1).getFormattedPrice();
+    }
+
+    /**
+     * Formatted price of the intro pricing phase on {@code (productId, basePlanId)}
+     * (e.g. {@code "$1.00"} for a "first week at $1" offer). Returns {@code null} if
+     * no intro offer is eligible / configured.
+     */
+    @Nullable
+    public String getIntroPrice(@NonNull String productId, @NonNull String basePlanId) {
+        com.playbillingwrapper.model.SubscriptionOfferDetails.PricingPhases phase =
+                getIntroPhase(productId, basePlanId);
+        return phase == null ? null : phase.getFormattedPrice();
+    }
+
+    /**
+     * Formatted price of the recurring (INFINITE_RECURRING) pricing phase on
+     * {@code (productId, basePlanId)} -- i.e. the renewal price the user pays after any
+     * trial or intro phase ends. Returns {@code null} if no offer is available yet.
+     */
+    @Nullable
+    public String getRecurringPrice(@NonNull String productId, @NonNull String basePlanId) {
+        List<com.playbillingwrapper.model.SubscriptionOfferDetails.PricingPhases> phases =
+                getOfferPhases(productId, basePlanId);
+        if (phases == null || phases.isEmpty()) return null;
+        for (com.playbillingwrapper.model.SubscriptionOfferDetails.PricingPhases p : phases) {
+            if (p.isRecurring()) return p.getFormattedPrice();
         }
         return phases.get(phases.size() - 1).getFormattedPrice();
     }
@@ -899,6 +1042,29 @@ public final class PlayBillingWrapper implements BillingEventListener {
                     }
                     final String isoFinal = iso;
                     analytics(a -> a.onTrialStarted(p.getProduct(), isoFinal, p));
+                } else {
+                    // Intro-started event: only fires when the purchase has no trial phase
+                    // but does have an intro phase. Trial and intro are mutually exclusive
+                    // from the "which event should I log" perspective -- a trial-then-intro
+                    // offer still logs as onTrialStarted, which matches funnel conventions.
+                    long introEndMs = getIntroEndMillis(p);
+                    if (introEndMs > 0L) {
+                        String iso = null;
+                        int cycles = 1;
+                        for (SubscriptionSpec s : config.subscriptions) {
+                            if (!s.productId.equals(p.getProduct())) continue;
+                            com.playbillingwrapper.model.SubscriptionOfferDetails.PricingPhases phase =
+                                    getIntroPhase(s.productId, s.basePlanId);
+                            if (phase != null) {
+                                iso = phase.getPeriodIso();
+                                cycles = Math.max(1, phase.getBillingCycleCount());
+                                break;
+                            }
+                        }
+                        final String isoFinal = iso;
+                        final int cyclesFinal = cycles;
+                        analytics(a -> a.onIntroStarted(p.getProduct(), isoFinal, cyclesFinal, p));
+                    }
                 }
             } else {
                 l.onLifetimePurchased(p);

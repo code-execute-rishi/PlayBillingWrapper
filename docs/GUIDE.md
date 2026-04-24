@@ -250,45 +250,49 @@ just less than the regular price.
 
 ```java
 BillingConfig cfg = BillingConfig.builder()
-    .addSubscription(SubscriptionSpec.builder()
-        .productId("com.yourapp.premium")
-        .basePlanId("monthly")
-        .preferredOfferId("intro_99c_1mo")  // pick the intro offer explicitly
-        .tag("monthly_intro")
-        .build())
+    // Sugar: equivalent to builder().preferredOfferId("intro_99c_1mo").
+    .addSubscription(SubscriptionSpec.withIntro(
+            "com.yourapp.premium", "monthly", "intro_99c_1mo"))
     .userId(sha256(currentUserId()))
     .build();
 
-// Render the full phase sequence on the paywall.
-List<ProductDetails.PricingPhase> phases =
-        billing.getPricingPhases("com.yourapp.premium", "monthly");
+// One-liner CTA labels using the typed intro helpers.
+String introPrice     = billing.getIntroPrice("com.yourapp.premium", "monthly");   // "$0.99"
+String recurringPrice = billing.getRecurringPrice("com.yourapp.premium", "monthly"); // "$4.99"
+String introPeriod    = billing.getIntroPeriodIso("com.yourapp.premium", "monthly"); // "P1M"
 
-// Typical intro result: one finite-recurring phase + one infinite-recurring phase.
-StringBuilder label = new StringBuilder();
-for (ProductDetails.PricingPhase p : phases) {
-    if (p.getRecurrenceMode() == ProductDetails.RecurrenceMode.FINITE_RECURRING) {
-        label.append(p.getFormattedPrice())
-             .append(" for ").append(p.getBillingCycleCount()).append(" month(s), then ");
-    } else {
-        label.append(p.getFormattedPrice()).append(" / month");
-    }
+if (introPrice != null) {
+    ctaIntro.setText(introPrice + " for 1 month, then " + recurringPrice + " / month");
+} else {
+    // Repeat user -- Play omits the intro offer, library falls back to the base plan.
+    ctaIntro.setText(recurringPrice + " / month");
 }
-ctaIntro.setText(label.toString());   // "$0.99 for 1 month(s), then $4.99 / month"
 
 ctaIntro.setOnClickListener(v ->
         billing.subscribe(activity, "com.yourapp.premium", "monthly"));
+```
+
+If you need every phase (intro + recurring) structurally, walk the typed phases:
+
+```java
+List<PricingPhases> phases = billing.getOfferPhases("com.yourapp.premium", "monthly");
+for (PricingPhases p : phases) {
+    if (p.isIntro())      Log.d("paywall", "intro: " + p.getFormattedPrice() + " × " + p.getBillingCycleCount());
+    if (p.isRecurring())  Log.d("paywall", "renews: " + p.getFormattedPrice() + " / " + p.getPeriodIso());
+}
 ```
 
 ### 4.3 Detecting which phase the user is currently in
 
 Play does not expose "current pricing phase" in the client `Purchase`. Options:
 
-1. **Time-based estimate** (client-only, good for UI):
+1. **Time-based estimate** (client-only, good for UI) -- one-liner via the library:
    ```java
-   long purchaseAt = purchase.getPurchaseTime();
-   long introEnd = purchaseAt + PlayBillingWrapper.parseIso8601DurationMillis("P1M");
-   boolean inIntroPhase = System.currentTimeMillis() < introEnd;
+   long introEnd = billing.getIntroEndMillis(purchase, "monthly");
+   boolean inIntroPhase = introEnd > 0 && System.currentTimeMillis() < introEnd;
    ```
+   Uses `purchaseTime + introPeriod * billingCycleCount`. Returns `-1` if the purchase has
+   no intro offer on the given base plan (e.g. repeat user who paid the full base price).
 2. **Authoritative** (server-side): query
    [`purchases.subscriptionsv2.get`](https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.subscriptionsv2/get)
    — the response contains the `currentPeriod` object with the phase id in effect.
