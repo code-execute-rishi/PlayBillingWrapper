@@ -22,6 +22,9 @@ import com.playbillingwrapper.status.SubscriptionState;
  *         {@code onConsumablePurchased}).</li>
  *     <li>{@link #onTrialStarted} — a subscription with a free-trial offer was just
  *         activated.</li>
+ *     <li>{@link #onIntroStarted} — a subscription with an intro-pricing offer was just
+ *         activated. Independent of {@link #onTrialStarted}: a combined offer (free
+ *         trial → intro phase → recurring) fires both events for the same purchase.</li>
  *     <li>{@link #onSubscriptionCancelled} — Play reports an auto-renew true→false
  *         transition.</li>
  *     <li>{@link #onUserCancelled} — user dismissed the Play dialog before paying.</li>
@@ -57,9 +60,28 @@ public interface BillingAnalytics {
      * A subscription was activated with a free-trial offer. Fires once per
      * {@code purchaseToken}. {@code periodIso} is the trial length as ISO 8601
      * (e.g. {@code "P3D"}, {@code "P7D"}). Useful for funnel dashboards.
+     * <p>
+     * Independent of {@link #onIntroStarted}: a combined offer (free trial -> intro week
+     * -> recurring) fires both events for the same purchase.
      */
     default void onTrialStarted(@NonNull String productId,
                                 @Nullable String periodIso,
+                                @NonNull PurchaseInfo purchase) { }
+
+    /**
+     * A subscription was activated with an intro-pricing offer (e.g. "$1 first week,
+     * then $19/year"). Fires once per {@code purchaseToken}. {@code periodIso} is the
+     * intro phase billing period as ISO 8601 (e.g. {@code "P1W"}, {@code "P1M"}).
+     * {@code billingCycleCount} is how many times the intro phase repeats before the
+     * recurring phase kicks in (often 1 but can be N).
+     * <p>
+     * Independent of {@link #onTrialStarted}: a combined offer (free trial -> intro week
+     * -> recurring) fires both events for the same purchase. Dedupe in your analytics
+     * pipeline if you want a single funnel event per checkout.
+     */
+    default void onIntroStarted(@NonNull String productId,
+                                @Nullable String periodIso,
+                                int billingCycleCount,
                                 @NonNull PurchaseInfo purchase) { }
 
     /** Auto-renewing flipped from true to false (fires once per transition). */

@@ -117,6 +117,107 @@ public class OfferSelectorTest {
         assertFalse(OfferSelector.isTrialEligible(details, BASE_PLAN));
     }
 
+    @Test
+    public void isIntroEligible_true_when_offer_has_finite_recurring_paid_phase() {
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "intro_1w_1usd", "tok-intro", introPhase(), paidPhase())
+        );
+        assertTrue(OfferSelector.isIntroEligible(details, BASE_PLAN));
+    }
+
+    @Test
+    public void isIntroEligible_false_when_only_base_plan_offer_exists() {
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase())
+        );
+        assertFalse(OfferSelector.isIntroEligible(details, BASE_PLAN));
+    }
+
+    @Test
+    public void isIntroEligible_false_when_only_free_trial_offer() {
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "freetrial", "tok-trial", freePhase(), paidPhase())
+        );
+        assertFalse(OfferSelector.isIntroEligible(details, BASE_PLAN));
+    }
+
+    @Test
+    public void isIntroEligible_false_for_different_base_plan() {
+        ProductDetails details = withOffers(
+                offer("monthly", "intro_1w_1usd", "tok-intro", introPhase(), paidPhase())
+        );
+        assertFalse(OfferSelector.isIntroEligible(details, BASE_PLAN));
+    }
+
+    @Test
+    public void preferredOfferId_picks_intro_offer() {
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "intro_1w_1usd", "tok-intro", introPhase(), paidPhase())
+        );
+        assertEquals("tok-intro",
+                OfferSelector.pick(details, BASE_PLAN, "intro_1w_1usd", false));
+    }
+
+    @Test
+    public void falls_back_to_base_plan_when_intro_offer_omitted_by_play() {
+        // Play hides the intro offer from repeat redeemers -- wrapper must still resolve a token.
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase())
+        );
+        assertEquals("tok-base",
+                OfferSelector.pick(details, BASE_PLAN, "intro_1w_1usd", false));
+    }
+
+    @Test
+    public void isIntroEligible_true_for_combined_trial_intro_offer() {
+        // Combined offer: free week -> $1 intro month -> recurring $19/yr.
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, "trial_intro_combo", "tok-combo", freePhase(), introPhase(), paidPhase())
+        );
+        assertTrue(OfferSelector.isIntroEligible(details, BASE_PLAN));
+        assertTrue(OfferSelector.isTrialEligible(details, BASE_PLAN));
+    }
+
+    @Test
+    public void findOfferWithIntroPhase_returns_offer_when_present() {
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "intro_1w_1usd", "tok-intro", introPhase(), paidPhase())
+        );
+        ProductDetails.SubscriptionOfferDetails got =
+                OfferSelector.findOfferWithIntroPhase(details, BASE_PLAN);
+        assertEquals("tok-intro", got.getOfferToken());
+    }
+
+    @Test
+    public void findOfferWithIntroPhase_null_when_only_base_plan() {
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase())
+        );
+        assertNull(OfferSelector.findOfferWithIntroPhase(details, BASE_PLAN));
+    }
+
+    @Test
+    public void hasIntroPhase_true_with_multi_cycle_intro() {
+        ProductDetails.SubscriptionOfferDetails o = offer(
+                BASE_PLAN, "intro_3m", "tok-3m", multiCycleIntroPhase(3), paidPhase());
+        assertTrue(OfferSelector.hasIntroPhase(o));
+    }
+
+    @Test
+    public void pick_with_preferTrial_true_picks_trial_even_when_intro_present() {
+        // preferTrial wins over intro offer when both eligible.
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "intro_1w_1usd", "tok-intro", introPhase(), paidPhase()),
+                offer(BASE_PLAN, "freetrial", "tok-trial", freePhase(), paidPhase())
+        );
+        assertEquals("tok-trial", OfferSelector.pick(details, BASE_PLAN, null, true));
+    }
+
     // ---- helpers ----
 
     private static ProductDetails withOffers(ProductDetails.SubscriptionOfferDetails... offers) {
@@ -152,6 +253,27 @@ public class OfferSelectorTest {
         when(p.getPriceAmountMicros()).thenReturn(12_99_000_000L);
         when(p.getFormattedPrice()).thenReturn("₹1299.00");
         when(p.getBillingPeriod()).thenReturn("P1Y");
+        when(p.getRecurrenceMode()).thenReturn(ProductDetails.RecurrenceMode.INFINITE_RECURRING);
+        return p;
+    }
+
+    private static ProductDetails.PricingPhase introPhase() {
+        ProductDetails.PricingPhase p = mock(ProductDetails.PricingPhase.class);
+        when(p.getPriceAmountMicros()).thenReturn(1_000_000L);
+        when(p.getFormattedPrice()).thenReturn("$1.00");
+        when(p.getBillingPeriod()).thenReturn("P1W");
+        when(p.getBillingCycleCount()).thenReturn(1);
+        when(p.getRecurrenceMode()).thenReturn(ProductDetails.RecurrenceMode.FINITE_RECURRING);
+        return p;
+    }
+
+    private static ProductDetails.PricingPhase multiCycleIntroPhase(int cycles) {
+        ProductDetails.PricingPhase p = mock(ProductDetails.PricingPhase.class);
+        when(p.getPriceAmountMicros()).thenReturn(2_990_000L);
+        when(p.getFormattedPrice()).thenReturn("$2.99");
+        when(p.getBillingPeriod()).thenReturn("P1M");
+        when(p.getBillingCycleCount()).thenReturn(cycles);
+        when(p.getRecurrenceMode()).thenReturn(ProductDetails.RecurrenceMode.FINITE_RECURRING);
         return p;
     }
 }

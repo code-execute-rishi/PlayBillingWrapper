@@ -1,6 +1,52 @@
 # Changelog
 
-## Unreleased (post-review hardening)
+## Unreleased
+
+### Added -- first-class intro pricing
+
+Making "cheap first period then normal price" offers (e.g. `$1 first week, then $19/year`)
+a one-liner, symmetric with the existing free-trial API.
+
+- **`SubscriptionSpec.withIntro(productId, basePlanId, introOfferId)`** -- sugar that sets
+  `preferredOfferId` to the intro offer.
+- **`PlayBillingWrapper.isIntroEligible(productId [, basePlanId])`** -- true when an offer
+  with a non-zero `FINITE_RECURRING` phase passes Play's offer-eligibility filter on this
+  account. Play omits offers the account fails the filter for (first-time-redeemer offer
+  for a repeat buyer, missing audience tag, expired promo), so this is the correct
+  "should I show the intro CTA?" gate. Mirrors `isTrialEligible`.
+- **`getIntroPhase(id, basePlan)` / `getIntroPeriodIso(id, basePlan)`** -- typed accessor +
+  ISO-8601 period for the intro phase. Spec-aware: prefers the registered
+  `SubscriptionSpec`'s offer (covers combined trial+intro shapes), falls back to the first
+  eligible offer on the base plan with an intro phase.
+- **`getIntroEndMillis(purchase [, basePlan])`** -- deterministic wall-clock estimate of
+  `purchaseTime + introPeriod * billingCycleCount`. Mirrors `getTrialEndMillis`. The
+  registered `SubscriptionSpec` is the source of truth for which offer the user purchased
+  -- a `preferTrial=true` spec that resolved to a trial-only offer returns `-1`, **not**
+  the end of an unrelated intro offer on the same base plan.
+- **`getIntroPrice(id, basePlan)` / `getRecurringPrice(id, basePlan)`** -- formatted price
+  strings for paywall CTAs, disambiguating the existing `getFormattedPrice` which returns
+  the first non-trial phase (i.e. the intro price when an intro offer is selected).
+- **`BillingAnalytics.onIntroStarted(productId, periodIso, billingCycleCount, purchase)`**
+  -- default no-op hook. Fires once per `purchaseToken` on first-time delivery,
+  **independent of `onTrialStarted`**: a combined offer (free trial -> intro week ->
+  recurring) fires both events for the same purchase. Pure-trial / pure-intro offers fire
+  only their respective event. Dedupe in your analytics pipeline if you need a single
+  funnel signal per checkout.
+- **`OfferSelector.isIntroEligible(details, basePlanId)`** + **`hasIntroPhase(offer)`** --
+  static helpers used by the wrapper and exposed for advanced offer routing.
+
+### Changed
+
+- **`getFormattedPrice(productId, basePlanId)` semantics clarified.** The method always
+  returned the first non-trial pricing phase. With the new intro-pricing surface, that
+  first non-trial phase is the *intro* price (e.g. `"$1.00"`) when an intro offer is
+  selected via `SubscriptionSpec.withIntro(...)` -- not the recurring price. Paywall
+  surfaces that always want the renewal price should migrate to the new
+  `getRecurringPrice(productId, basePlanId)`. No code change; documenting so integrators
+  upgrading from v0.3.0 who start using `withIntro` aren't surprised by labels flipping
+  from recurring → intro.
+
+## v0.3.0 (post-review hardening) — 2026-04-21
 
 Fixes surfaced by a manual correctness review of 0.1.1.
 

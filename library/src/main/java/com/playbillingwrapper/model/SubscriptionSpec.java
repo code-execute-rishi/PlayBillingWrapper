@@ -68,6 +68,26 @@ public final class SubscriptionSpec {
         return builder().productId(productId).basePlanId(basePlanId).preferTrial(true).build();
     }
 
+    /**
+     * Convenience for a base plan routed to a specific intro-pricing offer (e.g. "$1 first
+     * week, then $19/year"). {@code introOfferId} must match an offer configured on the
+     * base plan in Play Console. Equivalent to
+     * {@code builder().productId(...).basePlanId(...).preferredOfferId(introOfferId).build()}.
+     * <p>
+     * Play silently omits this offer from {@code ProductDetails} for repeat users, so the
+     * library falls back to the base plan offer automatically -- no client-side eligibility
+     * check needed. Use {@link com.playbillingwrapper.PlayBillingWrapper#isIntroEligible}
+     * if you need to branch paywall copy.
+     */
+    @NonNull
+    public static SubscriptionSpec withIntro(@NonNull String productId,
+                                             @NonNull String basePlanId,
+                                             @NonNull String introOfferId) {
+        return builder().productId(productId).basePlanId(basePlanId)
+                .preferredOfferId(Objects.requireNonNull(introOfferId, "introOfferId"))
+                .build();
+    }
+
     public static Builder builder() { return new Builder(); }
 
     public static final class Builder {
