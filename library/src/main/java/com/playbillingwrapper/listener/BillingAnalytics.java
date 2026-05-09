@@ -22,6 +22,9 @@ import com.playbillingwrapper.status.SubscriptionState;
  *         {@code onConsumablePurchased}).</li>
  *     <li>{@link #onTrialStarted} — a subscription with a free-trial offer was just
  *         activated.</li>
+ *     <li>{@link #onIntroStarted} — a subscription with an intro-pricing offer was just
+ *         activated. Independent of {@link #onTrialStarted}: a combined offer (free
+ *         trial → intro phase → recurring) fires both events for the same purchase.</li>
  *     <li>{@link #onSubscriptionCancelled} — Play reports an auto-renew true→false
  *         transition.</li>
  *     <li>{@link #onUserCancelled} — user dismissed the Play dialog before paying.</li>

@@ -832,10 +832,10 @@ billing.connect();
 ```java
 String introPrice     = billing.getIntroPrice("com.app.premium", "monthly");      // "$0.99"
 String recurringPrice = billing.getRecurringPrice("com.app.premium", "monthly");  // "$4.99"
-String introPeriod    = billing.getIntroPeriodIso("com.app.premium", "monthly");  // "P1M"
 
 if (billing.isIntroEligible("com.app.premium", "monthly")) {
     ctaButton.setText(introPrice + " for 1 month, then " + recurringPrice + " / month");
+    // Need the period dynamically? billing.getIntroPeriodIso(...) returns "P1M" / "P1W".
 } else {
     // Repeat user -- Play omits the intro offer; library falls back to base plan auto.
     ctaButton.setText(recurringPrice + " / month");

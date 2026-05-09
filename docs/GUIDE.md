@@ -17,7 +17,7 @@ Jump to:
 
 > **Install:**
 > ```gradle
-> implementation 'com.github.code-execute-rishi:PlayBillingWrapper:v0.2.1'
+> implementation 'com.github.code-execute-rishi:PlayBillingWrapper:v0.3.0'
 > ```
 > Plus `<uses-permission android:name="com.android.vending.BILLING" />` in the manifest.
 
@@ -260,10 +260,10 @@ BillingConfig cfg = BillingConfig.builder()
 // One-liner CTA labels using the typed intro helpers.
 String introPrice     = billing.getIntroPrice("com.yourapp.premium", "monthly");   // "$0.99"
 String recurringPrice = billing.getRecurringPrice("com.yourapp.premium", "monthly"); // "$4.99"
-String introPeriod    = billing.getIntroPeriodIso("com.yourapp.premium", "monthly"); // "P1M"
 
 if (introPrice != null) {
     ctaIntro.setText(introPrice + " for 1 month, then " + recurringPrice + " / month");
+    // Need the period dynamically? billing.getIntroPeriodIso(...) returns "P1M" / "P1W".
 } else {
     // Repeat user -- Play omits the intro offer, library falls back to the base plan.
     ctaIntro.setText(recurringPrice + " / month");

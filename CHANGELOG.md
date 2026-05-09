@@ -35,7 +35,18 @@ a one-liner, symmetric with the existing free-trial API.
 - **`OfferSelector.isIntroEligible(details, basePlanId)`** + **`hasIntroPhase(offer)`** --
   static helpers used by the wrapper and exposed for advanced offer routing.
 
-## v0.3.0 (post-review hardening)
+### Changed
+
+- **`getFormattedPrice(productId, basePlanId)` semantics clarified.** The method always
+  returned the first non-trial pricing phase. With the new intro-pricing surface, that
+  first non-trial phase is the *intro* price (e.g. `"$1.00"`) when an intro offer is
+  selected via `SubscriptionSpec.withIntro(...)` -- not the recurring price. Paywall
+  surfaces that always want the renewal price should migrate to the new
+  `getRecurringPrice(productId, basePlanId)`. No code change; documenting so integrators
+  upgrading from v0.3.0 who start using `withIntro` aren't surprised by labels flipping
+  from recurring → intro.
+
+## v0.3.0 (post-review hardening) — 2026-04-21
 
 Fixes surfaced by a manual correctness review of 0.1.1.
 
