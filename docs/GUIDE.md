@@ -10,6 +10,7 @@ Jump to:
 2. [Monthly subscription (no trial)](#2-monthly-subscription-no-trial)
 3. [Lifetime one-time product](#3-lifetime-one-time-product)
 4. [Subscription with intro pricing (cheap first period, then normal price)](#4-subscription-with-intro-pricing-cheap-first-period-then-normal-price)
+   - 4.6 Combined trial + intro offers
 5. [Wiring all four in a single paywall](#5-wiring-all-four-in-a-single-paywall)
 6. [Shared Play Console prep](#shared-play-console-prep)
 7. [Shared testing setup](#shared-testing-setup)
@@ -323,10 +324,40 @@ rolls it out.
 |---|------|----------|
 | 1 | Register the `intro_99c_1mo` offer in Play Console. Wait 10 minutes for propagation. | `getPricingPhases("com.yourapp.premium", "monthly")` returns 2 phases: `[FINITE_RECURRING $0.99 × 1 month, INFINITE_RECURRING $4.99]`. |
 | 2 | License tester who never subscribed before → tap CTA → Play dialog shows `$0.99 for 1 month, then $4.99`. | Play dialog wording matches your `getPricingPhases()` output. |
-| 3 | Complete purchase. | `onSubscriptionActivated(productId, ACTIVE, purchase)` fires. Play reports `isAutoRenewing() == true`. Your server-side verification should see `currentPeriod.phaseId == "intro_99c_1mo"`. |
+| 3 | Complete purchase. | `onSubscriptionActivated(productId, ACTIVE, purchase)` and `onIntroStarted(productId, "P1M", 1, purchase)` fire. Play reports `isAutoRenewing() == true`. Your server-side verification should see `currentPeriod.phaseId == "intro_99c_1mo"`. |
 | 4 | Wait for the accelerated 1-month intro phase to roll over to the base plan. | No client callback fires (Play does not emit an event for phase transitions). `getFormattedPrice(productId, basePlanId)` still returns the same string because it's the regular-phase price. |
 | 5 | License tester who already consumed the intro → tap CTA. | `Play` dialog charges the full `$4.99`; the library auto-falls back to the base plan offer because the intro offer is omitted from `ProductDetails` for ineligible users. |
 | 6 | Roll out a price change to `$5.99`. After Play propagation, a fresh paywall load shows `$0.99 for 1 month, then $5.99 / month`. | `getPricingPhases()` reflects the new regular phase. Existing subscribers see the old price until they consent / auto-accept. |
+
+### 4.6 Combined trial + intro offers
+
+Play allows up to three pricing phases on a single offer: a free trial, then a paid intro
+phase, then the recurring base price. Configure it in Play Console as one offer with
+two non-recurring phases (`Free for 3 days`, `$0.99 for 1 month`) plus the base plan's
+recurring phase.
+
+The library treats these as one offer driven by a single spec:
+
+```java
+SubscriptionSpec.builder()
+    .productId("com.yourapp.premium")
+    .basePlanId("monthly")
+    .preferredOfferId("trial3d_intro1mo")
+    .build();
+```
+
+Both events fire on activation -- they describe orthogonal facts about the purchase, not
+funnel steps:
+
+```java
+onTrialStarted("com.yourapp.premium", "P3D", purchase);
+onIntroStarted("com.yourapp.premium", "P1M", 1, purchase);
+```
+
+If your funnel needs a single "started" event per checkout, dedupe by `purchaseToken`
+in your analytics pipeline. `getTrialEndMillis(purchase, "monthly")` returns the end of
+the free phase; `getIntroEndMillis(purchase, "monthly")` returns the end of the paid
+intro phase (i.e. when the recurring price kicks in).
 
 ---
 

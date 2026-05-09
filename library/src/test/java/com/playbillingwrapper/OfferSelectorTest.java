@@ -171,6 +171,53 @@ public class OfferSelectorTest {
                 OfferSelector.pick(details, BASE_PLAN, "intro_1w_1usd", false));
     }
 
+    @Test
+    public void isIntroEligible_true_for_combined_trial_intro_offer() {
+        // Combined offer: free week -> $1 intro month -> recurring $19/yr.
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, "trial_intro_combo", "tok-combo", freePhase(), introPhase(), paidPhase())
+        );
+        assertTrue(OfferSelector.isIntroEligible(details, BASE_PLAN));
+        assertTrue(OfferSelector.isTrialEligible(details, BASE_PLAN));
+    }
+
+    @Test
+    public void findOfferWithIntroPhase_returns_offer_when_present() {
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "intro_1w_1usd", "tok-intro", introPhase(), paidPhase())
+        );
+        ProductDetails.SubscriptionOfferDetails got =
+                OfferSelector.findOfferWithIntroPhase(details, BASE_PLAN);
+        assertEquals("tok-intro", got.getOfferToken());
+    }
+
+    @Test
+    public void findOfferWithIntroPhase_null_when_only_base_plan() {
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase())
+        );
+        assertNull(OfferSelector.findOfferWithIntroPhase(details, BASE_PLAN));
+    }
+
+    @Test
+    public void hasIntroPhase_true_with_multi_cycle_intro() {
+        ProductDetails.SubscriptionOfferDetails o = offer(
+                BASE_PLAN, "intro_3m", "tok-3m", multiCycleIntroPhase(3), paidPhase());
+        assertTrue(OfferSelector.hasIntroPhase(o));
+    }
+
+    @Test
+    public void pick_with_preferTrial_true_picks_trial_even_when_intro_present() {
+        // preferTrial wins over intro offer when both eligible.
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "intro_1w_1usd", "tok-intro", introPhase(), paidPhase()),
+                offer(BASE_PLAN, "freetrial", "tok-trial", freePhase(), paidPhase())
+        );
+        assertEquals("tok-trial", OfferSelector.pick(details, BASE_PLAN, null, true));
+    }
+
     // ---- helpers ----
 
     private static ProductDetails withOffers(ProductDetails.SubscriptionOfferDetails... offers) {
@@ -216,6 +263,16 @@ public class OfferSelectorTest {
         when(p.getFormattedPrice()).thenReturn("$1.00");
         when(p.getBillingPeriod()).thenReturn("P1W");
         when(p.getBillingCycleCount()).thenReturn(1);
+        when(p.getRecurrenceMode()).thenReturn(ProductDetails.RecurrenceMode.FINITE_RECURRING);
+        return p;
+    }
+
+    private static ProductDetails.PricingPhase multiCycleIntroPhase(int cycles) {
+        ProductDetails.PricingPhase p = mock(ProductDetails.PricingPhase.class);
+        when(p.getPriceAmountMicros()).thenReturn(2_990_000L);
+        when(p.getFormattedPrice()).thenReturn("$2.99");
+        when(p.getBillingPeriod()).thenReturn("P1M");
+        when(p.getBillingCycleCount()).thenReturn(cycles);
         when(p.getRecurrenceMode()).thenReturn(ProductDetails.RecurrenceMode.FINITE_RECURRING);
         return p;
     }

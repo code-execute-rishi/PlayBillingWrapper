@@ -57,6 +57,9 @@ public interface BillingAnalytics {
      * A subscription was activated with a free-trial offer. Fires once per
      * {@code purchaseToken}. {@code periodIso} is the trial length as ISO 8601
      * (e.g. {@code "P3D"}, {@code "P7D"}). Useful for funnel dashboards.
+     * <p>
+     * Independent of {@link #onIntroStarted}: a combined offer (free trial -> intro week
+     * -> recurring) fires both events for the same purchase.
      */
     default void onTrialStarted(@NonNull String productId,
                                 @Nullable String periodIso,
@@ -68,6 +71,10 @@ public interface BillingAnalytics {
      * intro phase billing period as ISO 8601 (e.g. {@code "P1W"}, {@code "P1M"}).
      * {@code billingCycleCount} is how many times the intro phase repeats before the
      * recurring phase kicks in (often 1 but can be N).
+     * <p>
+     * Independent of {@link #onTrialStarted}: a combined offer (free trial -> intro week
+     * -> recurring) fires both events for the same purchase. Dedupe in your analytics
+     * pipeline if you want a single funnel event per checkout.
      */
     default void onIntroStarted(@NonNull String productId,
                                 @Nullable String periodIso,
