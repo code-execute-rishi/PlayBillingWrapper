@@ -54,9 +54,23 @@ public class OfferSelectorTest {
     }
 
     @Test
-    public void falls_back_to_base_plan_when_trial_not_requested() {
+    public void prefers_first_promo_over_base_plan_when_no_trial_requested() {
+        // Selection order (post-v0.4): preferred > trial > first promo > base plan offer.
+        // Without a trial preference, the wrapper still surfaces the available promo
+        // (Play silently omits ineligible promos, so any visible promo is sellable).
         ProductDetails details = withOffers(
                 offer(BASE_PLAN, "freetrial", "tok-trial", freePhase(), paidPhase()),
+                offer(BASE_PLAN, null, "tok-base", paidPhase())
+        );
+        assertEquals("tok-trial",
+                OfferSelector.pick(details, BASE_PLAN, null, false));
+    }
+
+    @Test
+    public void falls_back_to_base_plan_when_only_base_plan_offer_exists() {
+        // No promo offers at all -- step 3 (first promo) is empty, step 4 (base plan)
+        // returns the un-promoted recurring price.
+        ProductDetails details = withOffers(
                 offer(BASE_PLAN, null, "tok-base", paidPhase())
         );
         assertEquals("tok-base",
@@ -74,8 +88,9 @@ public class OfferSelectorTest {
     }
 
     @Test
-    public void falls_back_to_first_offer_if_no_null_offer_id() {
-        // All offers have non-null offerIds (no explicit "base plan" offer visible).
+    public void first_promo_wins_when_no_base_plan_offer_present() {
+        // All offers have non-null offerIds (no explicit base plan offer visible).
+        // Promo-loop catches the first one before the base-plan-offer loop runs.
         ProductDetails details = withOffers(
                 offer(BASE_PLAN, "standard", "tok-standard", paidPhase()),
                 offer(BASE_PLAN, "promo20", "tok-promo", paidPhase())
@@ -205,6 +220,116 @@ public class OfferSelectorTest {
         ProductDetails.SubscriptionOfferDetails o = offer(
                 BASE_PLAN, "intro_3m", "tok-3m", multiCycleIntroPhase(3), paidPhase());
         assertTrue(OfferSelector.hasIntroPhase(o));
+    }
+
+    @Test
+    public void findByOfferId_returns_offer_when_present() {
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "intro_variant_a", "tok-a", introPhase(), paidPhase()),
+                offer(BASE_PLAN, "intro_variant_b", "tok-b", introPhase(), paidPhase())
+        );
+        ProductDetails.SubscriptionOfferDetails got =
+                OfferSelector.findByOfferId(details, BASE_PLAN, "intro_variant_b");
+        assertEquals("tok-b", got.getOfferToken());
+    }
+
+    @Test
+    public void findByOfferId_null_when_offer_not_on_base_plan() {
+        ProductDetails details = withOffers(
+                offer("monthly", "intro_variant_a", "tok-a", introPhase(), paidPhase())
+        );
+        assertNull(OfferSelector.findByOfferId(details, BASE_PLAN, "intro_variant_a"));
+    }
+
+    @Test
+    public void findByOfferId_null_when_offer_omitted_by_play() {
+        // Play omitted intro_variant_b for this user (eligibility filter).
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "intro_variant_a", "tok-a", introPhase(), paidPhase())
+        );
+        assertNull(OfferSelector.findByOfferId(details, BASE_PLAN, "intro_variant_b"));
+    }
+
+    @Test
+    public void findByOfferId_null_offerId_returns_base_plan_offer() {
+        // offerId == null targets the un-promoted base plan offer (Play uses null for it).
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, "intro_variant_a", "tok-a", introPhase(), paidPhase()),
+                offer(BASE_PLAN, null, "tok-base", paidPhase())
+        );
+        ProductDetails.SubscriptionOfferDetails got =
+                OfferSelector.findByOfferId(details, BASE_PLAN, null);
+        assertEquals("tok-base", got.getOfferToken());
+    }
+
+    @Test
+    public void findByOfferId_non_null_offerId_skips_base_plan_offer() {
+        // Non-null offerId must not collapse to the base plan offer (where offerId == null).
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase())
+        );
+        assertNull(OfferSelector.findByOfferId(details, BASE_PLAN, "intro_variant_a"));
+    }
+
+    @Test
+    public void findByOfferId_null_offerId_returns_null_when_no_base_plan_offer() {
+        // No null-offerId entry on the base plan -- caller asked for the base plan slot
+        // that does not exist (e.g. catalog with only promo offers).
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, "intro_variant_a", "tok-a", introPhase(), paidPhase())
+        );
+        assertNull(OfferSelector.findByOfferId(details, BASE_PLAN, null));
+    }
+
+    @Test
+    public void preferred_offer_omitted_falls_through_to_first_promo_not_base_plan() {
+        // Spec asked for "winback_25" but Play omitted it (eligibility filter). Another
+        // promo is on the base plan. New order: surface the surviving promo rather
+        // than dropping to the un-promoted base plan.
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "intro_variant_a", "tok-a", introPhase(), paidPhase())
+        );
+        assertEquals("tok-a",
+                OfferSelector.pick(details, BASE_PLAN, "winback_25", false));
+    }
+
+    @Test
+    public void preferTrial_true_with_no_trial_falls_through_to_first_promo_not_base_plan() {
+        // preferTrial requested but no trial offer eligible. An intro promo exists.
+        // New order: sell the intro promo rather than the un-promoted base plan.
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "intro_variant_a", "tok-a", introPhase(), paidPhase())
+        );
+        assertEquals("tok-a",
+                OfferSelector.pick(details, BASE_PLAN, null, true));
+    }
+
+    @Test
+    public void multiple_promos_first_wins_when_no_preferred_or_trial() {
+        // First non-null-offerId offer in iteration order wins.
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "intro_variant_a", "tok-a", introPhase(), paidPhase()),
+                offer(BASE_PLAN, "intro_variant_b", "tok-b", introPhase(), paidPhase())
+        );
+        assertEquals("tok-a",
+                OfferSelector.pick(details, BASE_PLAN, null, false));
+    }
+
+    @Test
+    public void combined_trial_intro_offer_with_preferTrial_false_still_picked_as_promo() {
+        // Combined trial+intro offer alongside base plan. Without preferTrial it is
+        // still a promo (offerId != null) and wins over the base plan offer.
+        ProductDetails details = withOffers(
+                offer(BASE_PLAN, null, "tok-base", paidPhase()),
+                offer(BASE_PLAN, "trial_intro_combo", "tok-combo", freePhase(), introPhase(), paidPhase())
+        );
+        assertEquals("tok-combo",
+                OfferSelector.pick(details, BASE_PLAN, null, false));
     }
 
     @Test

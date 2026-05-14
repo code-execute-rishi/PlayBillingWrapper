@@ -339,6 +339,55 @@ public final class PlayBillingWrapper implements BillingEventListener {
         subscribeInternal(activity, spec);
     }
 
+    /**
+     * Launch the Play flow for an exact Play Console offer on a registered
+     * {@code (productId, basePlanId)} pair. Bypasses the registered
+     * {@link SubscriptionSpec}'s trial / preferred-offer routing and pays for
+     * {@code offerId} directly. Use to A/B between multiple offers on the same base plan
+     * (e.g. {@code intro_variant_a} vs {@code intro_variant_b}) without rewriting the
+     * catalog config -- the registered spec stays the eligibility source of truth, this
+     * method overrides the offer pick for one checkout.
+     * <p>
+     * Pass {@code offerId == null} to pay for the base plan offer itself (skip any promo
+     * offer the spec would otherwise auto-pick).
+     * <p>
+     * Reports an error via {@link WrapperListener#onError} and returns without launching
+     * checkout when:
+     * <ul>
+     *   <li>{@code (productId, basePlanId)} is not registered via
+     *       {@link com.playbillingwrapper.model.BillingConfig.Builder#addSubscription}.</li>
+     *   <li>{@code ProductDetails} have not been fetched yet (call {@link #connect()} and
+     *       wait for {@link WrapperListener#onReady()}).</li>
+     *   <li>{@code offerId} is not present in {@code ProductDetails} for the base plan --
+     *       typically because Play omitted it under the offer-eligibility filter
+     *       (first-time-redeemer offer for a repeat buyer, missing audience tag, expired
+     *       promo). Gate with {@link #getActiveOffer(String, String)} or
+     *       {@link #getOfferToken(String, String, String)} if you need to branch UI
+     *       before launching checkout.</li>
+     * </ul>
+     */
+    public void subscribe(@NonNull Activity activity,
+                          @NonNull String productId,
+                          @NonNull String basePlanId,
+                          @Nullable String offerId) {
+        SubscriptionSpec spec = findSpec(productId, basePlanId);
+        if (spec == null) return;
+        ProductDetails details = findProductDetails(productId);
+        if (details == null) {
+            reportError("Product details not fetched yet for " + productId + " -- did you call connect()?");
+            return;
+        }
+        ProductDetails.SubscriptionOfferDetails offer =
+                OfferSelector.findByOfferId(details, basePlanId, offerId);
+        if (offer == null) {
+            reportError("No offer with id '" + offerId + "' on " + productId + "/" + basePlanId +
+                    " -- did Play omit it under the offer-eligibility filter, or is the id wrong?");
+            return;
+        }
+        analytics(a -> a.onBeginCheckout(productId, basePlanId, offerId));
+        connector.purchaseSubscription(activity, productId, offer.getOfferToken());
+    }
+
     // ---------------------------------------------------------------------
     //  Sugar API (backward-compatible)
     // ---------------------------------------------------------------------
@@ -670,7 +719,8 @@ public final class PlayBillingWrapper implements BillingEventListener {
      * PENDING, lacks a ProductInfo, or has no intro offer on the given base plan.
      * <p>
      * Resolves the offer the user purchased the same way {@link OfferSelector#pick} did at
-     * checkout: registered spec's {@code preferredOfferId} > trial preference > base plan.
+     * checkout: registered spec's {@code preferredOfferId} > trial preference > first
+     * promo offer on the base plan > base plan offer (un-promoted).
      * The spec is treated as the source of truth for purchase intent -- if a registered
      * spec resolves to an offer that has no intro phase (e.g. {@code preferTrial=true}
      * picked a free-trial-only offer), this returns {@code -1} rather than falling back
@@ -726,6 +776,77 @@ public final class PlayBillingWrapper implements BillingEventListener {
             if (est > 0) return est;
         }
         return -1;
+    }
+
+    // ---------------------------------------------------------------------
+    //  Offer-level routing (for paywalls with multiple offers per base plan)
+    // ---------------------------------------------------------------------
+
+    /**
+     * Returns the resolved {@link com.playbillingwrapper.model.SubscriptionOfferDetails}
+     * that {@link #subscribe(Activity, String, String)} would pay for right now -- the
+     * single source of truth for "what offer is the user about to buy". Selection
+     * matches {@link OfferSelector#pick} using the registered {@link SubscriptionSpec}
+     * for {@code (productId, basePlanId)}: spec's {@code preferredOfferId} > trial
+     * preference > first promo offer on the base plan > base plan offer (un-promoted).
+     * <p>
+     * Returns {@code null} when:
+     * <ul>
+     *   <li>{@code (productId, basePlanId)} is not registered via
+     *       {@link com.playbillingwrapper.model.BillingConfig.Builder#addSubscription}
+     *       -- matches the silent no-op behavior of
+     *       {@link #subscribe(Activity, String, String)} with no spec.</li>
+     *   <li>{@code ProductDetails} have not been fetched yet.</li>
+     *   <li>No offer exists on the base plan in the fetched {@code ProductDetails}.</li>
+     * </ul>
+     * <p>
+     * Use this on the paywall to render exactly the price + period the user will pay,
+     * and to read {@link com.playbillingwrapper.model.SubscriptionOfferDetails#getOfferTags()
+     * offerTags} for cohort-aware UI (e.g. {@code "cohort=winback"},
+     * {@code "experiment=phase2"}). For a "show intro CTA only if eligible" gate,
+     * prefer the cheaper boolean {@link #isIntroEligible(String, String)}.
+     * <p>
+     * Eligibility safety: Play silently omits ineligible offers from {@code ProductDetails},
+     * so a non-null return from this method always corresponds to an offer Play will
+     * actually grant at purchase. There is no "promised intro price, charged full" risk
+     * -- {@code ProductDetails.getSubscriptionOfferDetails()} is the authoritative
+     * filtered list maintained by Play.
+     */
+    @Nullable
+    public com.playbillingwrapper.model.SubscriptionOfferDetails getActiveOffer(
+            @NonNull String productId, @NonNull String basePlanId) {
+        SubscriptionSpec spec = findSpecOrNull(productId, basePlanId);
+        if (spec == null) return null;
+        ProductDetails details = findProductDetails(productId);
+        if (details == null) return null;
+        ProductDetails.SubscriptionOfferDetails chosen =
+                OfferSelector.pickOffer(details, basePlanId, spec.preferredOfferId, spec.preferTrial);
+        if (chosen == null) return null;
+        return com.playbillingwrapper.model.SubscriptionOfferDetails.from(chosen);
+    }
+
+    /**
+     * Look up the Play {@code offerToken} for an exact (productId, basePlanId, offerId)
+     * tuple. Returns {@code null} when the offer is not present -- typically because
+     * Play omitted it under the offer-eligibility filter (first-time-redeemer offer for
+     * a repeat buyer, missing audience tag, expired promo) or the offer id is wrong.
+     * Pass {@code offerId == null} to look up the base plan offer's token directly.
+     * <p>
+     * Pure {@code ProductDetails} lookup -- does not require a registered
+     * {@link SubscriptionSpec}, so this works for ad-hoc offers fetched outside the
+     * configured catalog (advanced A/B routing). For the common "subscribe to this
+     * offer" call, use {@link #subscribe(Activity, String, String, String)} instead --
+     * it wraps the lookup plus the checkout launch and gates on the spec.
+     */
+    @Nullable
+    public String getOfferToken(@NonNull String productId,
+                                @NonNull String basePlanId,
+                                @Nullable String offerId) {
+        ProductDetails details = findProductDetails(productId);
+        if (details == null) return null;
+        ProductDetails.SubscriptionOfferDetails offer =
+                OfferSelector.findByOfferId(details, basePlanId, offerId);
+        return offer == null ? null : offer.getOfferToken();
     }
 
     // ---------------------------------------------------------------------
@@ -796,9 +917,10 @@ public final class PlayBillingWrapper implements BillingEventListener {
     }
 
     /**
-     * Every pricing phase of the best offer on {@code (productId, basePlanId)} (trial auto-
-     * preferred when eligible, otherwise the base plan offer). Returns {@code null} if
-     * products haven't fetched yet. Useful for intro-pricing UI:
+     * Every pricing phase of the best offer on {@code (productId, basePlanId)} per
+     * {@link OfferSelector#pick} (registered spec's {@code preferredOfferId} > trial
+     * preference > first promo offer on the base plan > base plan offer). Returns
+     * {@code null} if products haven't fetched yet. Useful for intro-pricing UI:
      * {@code "Free for 3 days, then $3.99/month"}.
      * <p>
      * Returns the library's typed {@link com.playbillingwrapper.model.SubscriptionOfferDetails.PricingPhases}
@@ -835,45 +957,13 @@ public final class PlayBillingWrapper implements BillingEventListener {
                                                               @NonNull String basePlanId) {
         ProductDetails details = findProductDetails(productId);
         if (details == null) return null;
-        List<ProductDetails.SubscriptionOfferDetails> offers = details.getSubscriptionOfferDetails();
-        if (offers == null) return null;
 
         SubscriptionSpec spec = findSpecOrNull(productId, basePlanId);
         String preferredOfferId = spec == null ? null : spec.preferredOfferId;
         boolean preferTrial = spec != null && spec.preferTrial;
 
-        ProductDetails.SubscriptionOfferDetails chosen = null;
-        if (preferredOfferId != null) {
-            for (ProductDetails.SubscriptionOfferDetails o : offers) {
-                if (basePlanId.equals(o.getBasePlanId())
-                        && preferredOfferId.equals(o.getOfferId())) {
-                    chosen = o;
-                    break;
-                }
-            }
-        }
-        if (chosen == null && preferTrial) {
-            for (ProductDetails.SubscriptionOfferDetails o : offers) {
-                if (!basePlanId.equals(o.getBasePlanId())) continue;
-                if (o.getOfferId() == null) continue;
-                for (ProductDetails.PricingPhase ph : o.getPricingPhases().getPricingPhaseList()) {
-                    if (ph.getPriceAmountMicros() == 0L) { chosen = o; break; }
-                }
-                if (chosen != null) break;
-            }
-        }
-        if (chosen == null) {
-            for (ProductDetails.SubscriptionOfferDetails o : offers) {
-                if (basePlanId.equals(o.getBasePlanId()) && o.getOfferId() == null) {
-                    chosen = o; break;
-                }
-            }
-        }
-        if (chosen == null) {
-            for (ProductDetails.SubscriptionOfferDetails o : offers) {
-                if (basePlanId.equals(o.getBasePlanId())) { chosen = o; break; }
-            }
-        }
+        ProductDetails.SubscriptionOfferDetails chosen =
+                OfferSelector.pickOffer(details, basePlanId, preferredOfferId, preferTrial);
         return chosen == null ? null : chosen.getPricingPhases().getPricingPhaseList();
     }
 

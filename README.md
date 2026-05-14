@@ -880,6 +880,42 @@ the source of truth: a `preferTrial=true` spec that resolved to a trial-only off
 returns `-1` rather than the end of an unrelated intro offer on the same base plan. For
 authoritative phase transitions, use `purchases.subscriptionsv2.get` server-side.
 
+### Intro pricing — decision matrix
+
+A flat lookup of "I want X → call Y". Every entry returns a value Play would actually
+honour at purchase: ineligible offers are silently omitted from `ProductDetails` by Play
+itself, so the wrapper inherits that filter as the source of truth. There is no separate
+client-side eligibility "check" you can forget — calling the right accessor IS the check.
+
+| Question | API |
+|---|---|
+| Can this user buy a free-trial offer right now? | `isTrialEligible(productId, basePlanId)` |
+| Can this user buy an intro-pricing offer right now? | `isIntroEligible(productId, basePlanId)` |
+| What's the formatted intro price? ("$0.99") | `getIntroPrice(productId, basePlanId)` |
+| What's the recurring renewal price? ("$4.99") | `getRecurringPrice(productId, basePlanId)` |
+| What's the intro billing period? ("P1W" / "P1M") | `getIntroPeriodIso(productId, basePlanId)` |
+| Full intro phase object (price + period + cycle count) | `getIntroPhase(productId, basePlanId)` |
+| Full phase list — free → intro → recurring, in order | `getOfferPhases(productId, basePlanId)` |
+| Which exact offer would `subscribe(...)` pay for? | `getActiveOffer(productId, basePlanId)` |
+| Look up Play's offerToken by exact offerId | `getOfferToken(productId, basePlanId, offerId)` |
+| Pay for an exact offer (A/B routing) | `subscribe(activity, productId, basePlanId, offerId)` |
+| Estimated wall-clock end of the intro phase | `getIntroEndMillis(purchase, basePlanId)` |
+| ISO 8601 period → milliseconds | `PlayBillingWrapper.parseIso8601DurationMillis("P1W")` |
+| Read cohort / experiment tags configured in Play Console | `getActiveOffer(...).getOfferTags()` (e.g. `cohort=winback`, `experiment=phase2`) |
+
+**Common pitfalls.**
+
+- `getFormattedPrice(productId, basePlanId)` returns the *first non-trial* phase. For an
+  intro offer that's the intro price, not the recurring price. Use `getIntroPrice` and
+  `getRecurringPrice` to be explicit.
+- "Eligibility flipped during the session" — Play omits ineligible offers at
+  `ProductDetails` query time. Call `restorePurchases(...)` after a sign-in / restore;
+  the next `onReady()` reflects the new offer list. There is no separate eligibility
+  listener — re-evaluate from `onReady()`.
+- "I see two intro offers on the same base plan." `getActiveOffer(...)` picks one per
+  the registered `SubscriptionSpec`'s `preferredOfferId`. To A/B between offers without
+  rewriting the spec, route checkout via `subscribe(activity, productId, basePlanId, offerId)`.
+
 ### Intro pricing with typed phases
 
 If your paywall renders every phase verbatim, walk the typed phase list:
@@ -1057,6 +1093,7 @@ Optionally pass `ProcessLifecycleOwner.get().getLifecycle()` so `release()` is c
 | `void purchaseConsumable(Activity, String productId)` | Launch the Play flow for a consumable (coins / gems / lives). Auto-consumed after delivery. |
 | `void subscribe(Activity, String productId, String basePlanId)` | Launch the subscription flow using the registered `SubscriptionSpec`'s trial preference and preferred offer id. |
 | `void subscribe(Activity, String productId, String basePlanId, boolean preferTrial)` | Same, but override the registered trial preference for this invocation. |
+| `void subscribe(Activity, String productId, String basePlanId, @Nullable String offerId)` | Pay for an exact Play Console offer id on a **registered** `(productId, basePlanId)` pair. Bypasses the spec's trial / preferred-offer pick but keeps spec registration as the gate — emits `onError` if the pair is unregistered. Pass `offerId == null` to pay for the un-promoted base plan offer. Also emits `onError` if Play omitted that offer under the eligibility filter. Use for A/B between offers on the same base plan. |
 | `void subscribe(Activity, SubscriptionSpec)` | Launch with an ad-hoc spec (A/B tests). |
 | `void changeSubscription(Activity, String oldId, String newId, String newBasePlanId, ChangeMode)` | Upgrade / downgrade / swap. `oldPurchaseToken` is looked up automatically from the owned-purchases list. |
 | `void openManageSubscription(Activity, String productId)` | Deep-link into Play. |
@@ -1104,6 +1141,15 @@ Optionally pass `ProcessLifecycleOwner.get().getLifecycle()` so `release()` is c
 | `long getIntroEndMillis(PurchaseInfo, String basePlanId)` | Estimated wall-clock end of the intro phase, computed as `purchaseTime + introPeriod * billingCycleCount`. The registered `SubscriptionSpec` is the source of truth for which offer the user purchased — a `preferTrial=true` spec that resolved to a trial-only offer returns `-1`, **not** the end of an unrelated intro offer on the same base plan. With no spec registered for `(productId, basePlanId)`, falls back to the first offer on the base plan with an intro phase. |
 | `long getIntroEndMillis(PurchaseInfo)` | Convenience scan across registered specs for this product id; returns the first non-`-1` estimate. |
 
+#### Offer routing (multi-offer per base plan)
+
+| Method | Returns |
+|--------|---------|
+| `SubscriptionOfferDetails getActiveOffer(String productId, String basePlanId)` | The full offer wrapper `subscribe(activity, productId, basePlanId)` would pay for right now — same selection as `OfferSelector.pick` keyed off the registered `SubscriptionSpec` for the pair. Carries `getOfferId / getOfferTags / getOfferToken / getPricingPhases`. `null` if the pair is not registered via `BillingConfig.Builder.addSubscription`, products have not been fetched yet, or no offer exists on the base plan. Use to render the exact price the user will pay and to branch on `offerTags` (e.g. `cohort=winback`, `experiment=phase2`). |
+| `String getOfferToken(String productId, String basePlanId, @Nullable String offerId)` | Look up Play's `offerToken` by exact `(product, basePlan, offerId)` tuple. Pass `offerId == null` to target the un-promoted base plan offer (Play returns `offerId == null` for it). Returns `null` when Play omitted the offer under the eligibility filter or the id is wrong. Pure `ProductDetails` lookup — does not require a registered spec, so this works for ad-hoc offers outside the configured catalog. Feed directly to advanced flows (e.g. `BillingConnector.changeSubscription`). |
+
+**Eligibility safety contract.** Play silently omits offers the current account fails the eligibility filter for (first-time-redeemer offer for a repeat buyer, missing audience tag, expired promo) from `ProductDetails.getSubscriptionOfferDetails()`. Every method above only ever returns offers Play would actually grant at checkout, so there is no "promised intro price, charged full" risk — the wrapper inherits Play's filtered list as the source of truth.
+
 #### Paywall price helpers
 
 | Method | Returns |
@@ -1129,6 +1175,12 @@ Optionally pass `ProcessLifecycleOwner.get().getLifecycle()` so `release()` is c
 | `void setListener(@Nullable WrapperListener)` | Swap the callback surface. |
 | `BillingConnector rawConnector()` | Escape hatch for advanced use cases (upgrade/downgrade, consumables, installment plans). |
 | `BillingConfig getConfig()` | Read the config back. |
+
+#### Static helpers
+
+| Method | Returns |
+|--------|---------|
+| `static long parseIso8601DurationMillis(String iso)` | Millisecond duration of an ISO 8601 period string of the form `PnD` / `PnW` / `PnM` / `PnY` (the only forms Play uses for subscription billing periods). Months approximated as 30 days, years as 365 days — sufficient for client-side reminders; use the Play Developer API for calendar-exact expiry. Returns `-1` on malformed input. Aliased on the typed phase wrapper as `PricingPhases.getPeriodDurationMillis()`. |
 
 ### `SubscriptionSpec`
 
@@ -1223,6 +1275,19 @@ static String pick(ProductDetails details,
 static boolean isTrialEligible(ProductDetails details, String basePlanId);
 static boolean isIntroEligible(ProductDetails details, String basePlanId);
 static boolean hasIntroPhase(ProductDetails.SubscriptionOfferDetails offer);
+static ProductDetails.SubscriptionOfferDetails findByOfferId(
+        ProductDetails details, String basePlanId, @Nullable String offerId);
+```
+
+`findByOfferId` returns the exact-tuple match or `null` when Play omitted the offer under
+the eligibility filter. Pass `offerId == null` to target the un-promoted base plan offer.
+
+The library's typed offer wrapper exposes a static factory for wrapping a raw Play SDK
+offer:
+
+```java
+com.playbillingwrapper.model.SubscriptionOfferDetails wrapped =
+        com.playbillingwrapper.model.SubscriptionOfferDetails.from(sdkOffer);
 ```
 
 ### `IdempotencyStore`
@@ -1461,6 +1526,7 @@ correctness references during the rewrite. See [`NOTICE`](NOTICE) for attributio
 
 ## Additional documentation
 
+- [`AGENTS.md`](AGENTS.md) — terse, copy-pasteable contract for AI coding agents (Claude Code, Cursor, Copilot, Codex, etc.) integrating the library. Decision matrix, offer-selection order, eligibility safety contract, common pitfalls.
 - [`docs/GUIDE.md`](docs/GUIDE.md) — end-to-end guide for 4 real-world paywall shapes: yearly with 3-day trial, monthly, lifetime one-time, and monthly with intro pricing (cheap first period then normal price). Play Console setup + Android code + per-scenario test matrix.
 - [`docs/INTEGRATION.md`](docs/INTEGRATION.md) — step-by-step Play Console setup and first-run walkthrough.
 - [`docs/API.md`](docs/API.md) — condensed API reference.

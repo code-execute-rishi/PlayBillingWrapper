@@ -25,8 +25,10 @@ public final class SubscriptionSpec {
     /**
      * When true, {@link com.playbillingwrapper.PlayBillingWrapper#subscribe subscribe()}
      * auto-picks a free-trial offer on this base plan if the user is still eligible (Play
-     * silently omits ineligible offers from {@code ProductDetails}). Falls back to the
-     * base plan offer otherwise.
+     * silently omits ineligible offers from {@code ProductDetails}). When the trial
+     * offer is not eligible, the selector falls through to the rest of the
+     * {@link com.playbillingwrapper.OfferSelector#pick} order: first remaining promo
+     * offer on the base plan, then the un-promoted base plan offer.
      */
     public final boolean preferTrial;
 
@@ -74,10 +76,11 @@ public final class SubscriptionSpec {
      * base plan in Play Console. Equivalent to
      * {@code builder().productId(...).basePlanId(...).preferredOfferId(introOfferId).build()}.
      * <p>
-     * Play silently omits this offer from {@code ProductDetails} for repeat users, so the
-     * library falls back to the base plan offer automatically -- no client-side eligibility
-     * check needed. Use {@link com.playbillingwrapper.PlayBillingWrapper#isIntroEligible}
-     * if you need to branch paywall copy.
+     * Play silently omits this offer from {@code ProductDetails} for repeat users; in
+     * that case the {@link com.playbillingwrapper.OfferSelector#pick} fallback applies:
+     * first remaining promo offer on the base plan, then the un-promoted base plan
+     * offer. Use {@link com.playbillingwrapper.PlayBillingWrapper#isIntroEligible} to
+     * branch paywall copy explicitly.
      */
     @NonNull
     public static SubscriptionSpec withIntro(@NonNull String productId,

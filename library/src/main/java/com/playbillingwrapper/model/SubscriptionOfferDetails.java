@@ -32,6 +32,21 @@ public class SubscriptionOfferDetails {
         }
     }
 
+    /**
+     * Wrap a raw Play SDK offer in the library's typed model. {@code offerId} is
+     * {@code null} for the base plan itself (no promo offer attached). {@code offerTags}
+     * mirrors Play Console's tags configured on the offer.
+     */
+    @NonNull
+    public static SubscriptionOfferDetails from(@NonNull ProductDetails.SubscriptionOfferDetails sdk) {
+        return new SubscriptionOfferDetails(
+                sdk.getOfferId(),
+                sdk.getPricingPhases().getPricingPhaseList(),
+                sdk.getOfferTags(),
+                sdk.getOfferToken(),
+                sdk.getBasePlanId());
+    }
+
     public String getOfferId() {
         return offerId;
     }
