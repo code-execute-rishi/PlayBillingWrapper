@@ -25,9 +25,24 @@ public final class OfferSelector {
      *     <li>If {@code preferredOfferId} is non-null and matches an offer, that token wins.</li>
      *     <li>Otherwise, if {@code preferTrial} is true and a free-trial offer is eligible,
      *         that token wins.</li>
-     *     <li>Otherwise, the base plan offer (offerId == null) wins.</li>
-     *     <li>As a last resort, the first offer on the base plan.</li>
+     *     <li>Otherwise, the first promo offer on the base plan (any offer with a
+     *         non-null {@code offerId} -- i.e. Play Console-configured promos like
+     *         winbacks, intro pricing, audience-tagged offers).</li>
+     *     <li>As a last resort, the base plan offer itself ({@code offerId == null} --
+     *         the un-promoted recurring price).</li>
      * </ol>
+     * <p>
+     * Rationale for "promo before base plan": Play silently omits promos the current
+     * account fails the eligibility filter for, so any promo that survives into
+     * {@code ProductDetails} is one Play will honour at checkout. Surfacing the best
+     * available promo by default is the safer, revenue-positive choice. Callers who
+     * specifically want the un-promoted base plan at checkout can call the exact-offer
+     * overload {@code PlayBillingWrapper.subscribe(activity, productId, basePlanId,
+     * null)} -- {@code null} for {@code offerId} resolves via
+     * {@link #findByOfferId} to the base plan offer (which Play returns with
+     * {@code offerId == null}). There is no spec-level "always pick base plan" flag in
+     * v0.4; setting {@code SubscriptionSpec.preferredOfferId = null} means "no
+     * preference", not "prefer the base plan offer".
      *
      * @return an offer token, or {@code null} if no offer on the base plan can be resolved.
      */
@@ -72,11 +87,21 @@ public final class OfferSelector {
             }
         }
 
+        // Prefer the first promo offer on the base plan over the un-promoted base plan
+        // offer. Play omits ineligible promos, so any surviving promo is sellable to
+        // this account and surfacing it by default is revenue-positive.
+        for (ProductDetails.SubscriptionOfferDetails o : onBasePlan) {
+            if (o.getOfferId() != null) return o;
+        }
+
+        // Last resort: the un-promoted base plan offer (offerId == null). Every offer
+        // in onBasePlan has either a non-null or null offerId, so combined with the
+        // promo loop above this is exhaustive on a non-empty onBasePlan -- no further
+        // fallback needed.
         for (ProductDetails.SubscriptionOfferDetails o : onBasePlan) {
             if (o.getOfferId() == null) return o;
         }
-
-        return onBasePlan.get(0);
+        return null;
     }
 
     /**
@@ -128,6 +153,30 @@ public final class OfferSelector {
             if (!basePlanId.equals(o.getBasePlanId())) continue;
             if (o.getOfferId() == null) continue;
             if (hasIntroPhase(o)) return o;
+        }
+        return null;
+    }
+
+    /**
+     * Look up an offer on {@code basePlanId} by its exact {@code offerId}. Returns
+     * {@code null} when no offer matches -- typically because Play omitted it under the
+     * offer-eligibility filter (first-time-redeemer offer for a repeat buyer, missing
+     * audience tag, expired promo). Pass the {@code offerId} configured in Play Console.
+     * <p>
+     * Pass {@code null} to target the base plan offer itself (Play returns
+     * {@code offerId == null} for the un-promoted base plan price), useful when callers
+     * want to bypass any promo offers and route to recurring pricing directly.
+     */
+    @Nullable
+    public static ProductDetails.SubscriptionOfferDetails findByOfferId(
+            @NonNull ProductDetails details,
+            @NonNull String basePlanId,
+            @Nullable String offerId) {
+        List<ProductDetails.SubscriptionOfferDetails> all = details.getSubscriptionOfferDetails();
+        if (all == null) return null;
+        for (ProductDetails.SubscriptionOfferDetails o : all) {
+            if (!basePlanId.equals(o.getBasePlanId())) continue;
+            if (java.util.Objects.equals(offerId, o.getOfferId())) return o;
         }
         return null;
     }

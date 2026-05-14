@@ -2,6 +2,101 @@
 
 ## Unreleased
 
+### Behavior change -- `OfferSelector.pick` fallback order swapped
+
+Previous order (pre-v0.4):
+
+> `preferredOfferId` → trial → base plan offer (un-promoted) → first offer on base plan
+
+New order:
+
+> `preferredOfferId` → trial → first promo offer on base plan (`offerId != null`) → base plan offer (un-promoted, `offerId == null`)
+
+**Affects which offer is sold by default** in every spec-driven flow:
+`subscribe(activity, productId, basePlanId)`, `subscribe(activity, SubscriptionSpec)`,
+`changeSubscription`, and the spec-derived accessors `getActiveOffer`, `getIntroPhase`,
+`getIntroEndMillis`, `getOfferPhases`, `getPricingPhases`, `getFormattedPrice`,
+`getRecurringPrice`.
+
+**Concretely changes behavior whenever the spec-derived selection falls through
+preferred + trial AND the base plan has BOTH a promo offer (`offerId != null`) and the
+un-promoted base plan offer (`offerId == null`).** Specifically:
+
+- `SubscriptionSpec.of(productId, basePlanId)` (no preferred, no trial) with a promo on
+  the plan — old: sold base plan, new: sells the promo.
+- `SubscriptionSpec.withTrial(...)` when Play omitted the trial offer (e.g. returning
+  user) and another promo exists — old: fell back to base plan, new: sells the other
+  promo.
+- `SubscriptionSpec` with `preferredOfferId` set, when Play omitted that offer (failed
+  eligibility filter) and another promo exists — old: fell back to base plan, new:
+  sells the other promo.
+
+Rationale: Play silently omits ineligible promos from `ProductDetails`, so any promo
+that survives into the offer list is one Play will honour at checkout. Surfacing the
+best available promo by default is the revenue-positive choice; "fall through to the
+un-promoted recurring price" is a buried-discount footgun, not a safety feature.
+
+**Migration.**
+
+- To target the un-promoted base plan offer at checkout time, call the new
+  `subscribe(activity, productId, basePlanId, null)` overload — `null` for `offerId`
+  resolves to the base plan offer directly (`Objects.equals(null, o.getOfferId())`).
+- For paywall accessors (`getActiveOffer`, `getIntroPhase`, etc.) there is no
+  spec-level "always pick base plan" flag in v0.4. If you need the un-promoted
+  recurring phase, use `getRecurringPrice(productId, basePlanId)` (filters phases by
+  `INFINITE_RECURRING` recurrence mode) — it returns the renewal price regardless of
+  which offer the selector picked.
+- If you specifically want spec-driven flows to keep selecting the base plan as the
+  default, file an issue — adding a `preferBasePlan` flag to `SubscriptionSpec` is a
+  candidate follow-up.
+
+### Added -- offer-level routing for multi-offer base plans
+
+For paywalls that A/B between several offers on the same base plan (e.g.
+`intro_variant_a` vs `intro_variant_b`) or need to read offer tags configured in Play
+Console for cohort-aware UI.
+
+- **`PlayBillingWrapper.getActiveOffer(productId, basePlanId)`** -- returns the typed
+  `SubscriptionOfferDetails` wrapper that `subscribe(activity, productId, basePlanId)`
+  would pay for right now. Same selection as `OfferSelector.pick`: registered spec's
+  `preferredOfferId` > trial preference > first promo offer on the base plan > base
+  plan offer (un-promoted). Returns `null` when no `SubscriptionSpec` is registered for
+  the pair (mirrors the silent no-op of `subscribe(activity, productId, basePlanId)`
+  with no spec). Exposes `getOfferId`, `getOfferTags`, `getOfferToken`,
+  `getPricingPhases` for cohort-aware paywall branching.
+- **`PlayBillingWrapper.getOfferToken(productId, basePlanId, offerId)`** -- exact-tuple
+  lookup. Accepts a `@Nullable offerId`: pass `null` to target the un-promoted base plan
+  offer directly. Returns `null` when Play omitted the offer under the eligibility
+  filter or the id is wrong. Pure `ProductDetails` lookup -- no spec registration
+  required, so this works for ad-hoc routing outside the configured catalog.
+- **`PlayBillingWrapper.subscribe(activity, productId, basePlanId, offerId)`** -- new
+  overload that pays for an exact Play Console offer id, bypassing the registered spec's
+  trial / preferred-offer pick. Gated on `findSpec(productId, basePlanId)` -- if the
+  pair is not registered via `BillingConfig.Builder.addSubscription`, emits `onError`
+  and returns without launching checkout. Accepts a `@Nullable offerId`: pass `null` to
+  pay for the base plan offer itself.
+- **`OfferSelector.findByOfferId(details, basePlanId, offerId)`** + **`SubscriptionOfferDetails.from(sdk)`**
+  -- static helpers used by the wrapper and exposed for advanced offer routing.
+  `findByOfferId` accepts a `@Nullable offerId` and uses `Objects.equals` to allow
+  lookup of the base plan offer (which Play returns with `offerId == null`).
+
+### Documented
+
+- New **`AGENTS.md`** at the project root: terse, copy-pasteable integration contract
+  for AI coding agents (Claude Code, Cursor, Copilot, Codex, etc.). Covers minimum
+  viable integration, decision matrix, offer-selection order, eligibility safety
+  contract, idempotent delivery contract, common pitfalls, full API surface index.
+- **`PlayBillingWrapper.parseIso8601DurationMillis(String)`** is now in the API
+  reference. Already existed since v0.2; aliased on `PricingPhases.getPeriodDurationMillis()`.
+- New **decision-matrix table for intro pricing** under the 5-step intro guide, mapping
+  every common paywall question to the right accessor in one place.
+- Explicit **eligibility safety contract** in README + `getActiveOffer` Javadoc: Play
+  silently omits offers the account fails the eligibility filter for, so every
+  wrapper accessor only ever returns offers Play would honour at checkout. There is no
+  separate client-side eligibility "check" to forget.
+
+## v0.4.0 — 2026-05-09
+
 ### Added -- first-class intro pricing
 
 Making "cheap first period then normal price" offers (e.g. `$1 first week, then $19/year`)
